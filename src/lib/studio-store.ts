@@ -114,7 +114,7 @@ interface StudioState {
   setViewer: (patch: Partial<StudioState['viewer']>) => void
   loadHistory: () => Promise<void>
   /* Routage live [DeepPCB] */
-  startLiveRouting: (pacingMs?: number) => Promise<void>
+  startLiveRouting: (pacingMs?: number, force?: boolean) => Promise<void>
   stopLiveRouting: (reason?: 'user' | 'nudge') => void
   setLiveSpeed: (v: number) => void
   /** Nudge chirurgical PENDANT un flux live : coupe le flux, déplace, repart en direct */
@@ -150,6 +150,12 @@ let liveStreamDone = false
 let liveSawComplete = false
 let liveStopReason: 'user' | 'nudge' | null = null
 let liveT0 = 0
+let liveLastError: string | null = null
+/** Génération de session : tout ce qui appartient à une session supplantée
+ *  (lecteur SSE attardé, tick de lecture résiduel) perd toute autorité — il
+ *  se mute silencieusement au lieu de corrompre la session courante. */
+let liveEpoch = 0
+let livePumpEpoch = -1
 
 /** Joue un événement de la file : trace visible, métadonnées HUD, ou finalisation. */
 function liveApplyQueued(q: LiveQueued) {
@@ -181,20 +187,38 @@ function liveApplyQueued(q: LiveQueued) {
     `[DEEPPCB] Routage live terminé en ${((Date.now() - liveT0) / 1000).toFixed(1)} s — ${routing.routedNets}/${routing.totalNets} nets · ${routing.viaCount} vias${routing.viasRemoved ? ` (−${routing.viasRemoved})` : ''} · DFM ${dfm.score}/100 — analyse + export régénérés`)
 }
 
-/** Cadence la lecture : 1 événement toutes les BASE_TICK_MS / liveSpeed. */
+/** Cadence la lecture : 1 événement toutes les BASE_TICK_MS / liveSpeed.
+ *  À épreuve d'exceptions ET de générations : un événement défectueux ne tue
+ *  jamais la chaîne, et une session supplantée se mute sans rien toucher.
+ *  En fin de flux (EOF), le backlog restant est joué par RAFALES bornées —
+ *  la finalisation ne traîne pas des dizaines de secondes derrière le rendu. */
 function livePump() {
   if (liveTimer || liveQueue.length === 0) return
   const speed = useStudio.getState().liveSpeed || 1
   liveTimer = setTimeout(() => {
     liveTimer = null
-    const q = liveQueue.shift()
-    if (q && useStudio.getState().liveRouting.active) liveApplyQueued(q)
+    try {
+      const batch = liveStreamDone
+        ? Math.min(liveQueue.length, Math.max(1, Math.ceil(liveQueue.length / 12)))
+        : 1
+      for (let i = 0; i < batch; i++) {
+        const q = liveQueue.shift()
+        if (!q) break
+        if (livePumpEpoch !== liveEpoch) { liveQueue = []; break }
+        if (useStudio.getState().liveRouting.active) liveApplyQueued(q)
+      }
+    } catch (e) {
+      liveLastError = e instanceof Error ? e.message : String(e)
+      useStudio.getState().log('system', 'error', `[LIVE] Erreur de lecture du flux : ${liveLastError}`)
+    }
+    if (livePumpEpoch !== liveEpoch) { liveQueue = []; return } // session remplacée
     if (liveQueue.length > 0) livePump()
     else if (liveStreamDone) liveFinish()
   }, Math.max(4, BASE_TICK_MS / speed))
 }
 
 function liveEnqueue(q: LiveQueued) {
+  livePumpEpoch = liveEpoch
   liveQueue.push(q)
   livePump()
 }
@@ -245,6 +269,7 @@ export const useStudio = create<StudioState>((set, get) => ({
 
   setProject: (id) => {
     const nl = get().customNetlists.find((x) => x.id === id) ?? getNetlist(id)
+    liveEpoch++
     liveFlush()
     set({
       netlistId: id,
@@ -357,8 +382,16 @@ export const useStudio = create<StudioState>((set, get) => ({
 
   stopLiveRouting: (reason = 'user') => {
     liveStopReason = reason
+    liveEpoch++ // la session en cours perd son autorité — son lecteur SSE mourant ne gèrera rien
     liveFlush()
     liveAbort?.abort()
+    // clôture immédiate : le HUD se ferme tout de suite, sans attendre le rejet réseau
+    if (useStudio.getState().liveRouting.active) {
+      useStudio.getState().endLiveRouting()
+      if (reason === 'user') {
+        useStudio.getState().log('system', 'warn', '[DEEPPCB] Flux de routage live interrompu par l’utilisateur.')
+      }
+    }
   },
 
   setLiveSpeed: (v) => {
@@ -377,12 +410,11 @@ export const useStudio = create<StudioState>((set, get) => ({
     if (s.running || s.surgicalBusy || !s.livePlacements) return
     set({ surgicalBusy: true })
     get().log('system', 'agent', `[NUDGE LIVE] ${ref} déplacé de (${dx > 0 ? '+' : ''}${dx}, ${dy > 0 ? '+' : ''}${dy}) mm — coupure du flux puis re-routage en direct…`)
+    // stopLiveRouting révoque la génération en cours : la vieille session ne
+    // peut plus ni finaliser ni corrompre l'état — même si sa réponse SSE est
+    // déjà fully bufferisée côté navigateur (abort sans effet visible).
     if (s.liveRouting.active) get().stopLiveRouting('nudge')
-    // laisse le lecteur SSE s'arrêter (abort asynchrone → endLiveRouting)
-    const t0 = Date.now()
-    while (get().liveRouting.active && Date.now() - t0 < 2000) {
-      await new Promise((r) => setTimeout(r, 20))
-    }
+    await new Promise((r) => setTimeout(r, 60)) // laisse les microtasks mourir
     // déplacement borné dans la carte (même règle que la chirurgie classique)
     const nl = get().netlist
     const clamped = get().livePlacements!.map((p) => {
@@ -399,19 +431,25 @@ export const useStudio = create<StudioState>((set, get) => ({
       }
     })
     set({ livePlacements: clamped, surgicalBusy: false })
-    void get().startLiveRouting() // le routeur repart EN DIRECT, trait par trait
+    void get().startLiveRouting(3, true) // le routeur repart EN DIRECT, trait par trait
   },
 
-  startLiveRouting: async (pacingMs = 3) => {
+  startLiveRouting: async (pacingMs = 3, force = false) => {
     const s = get()
-    if (s.running || s.liveRouting.active) return
+    if (s.running) return // le pipeline reste prioritaire absolu
+    if (!force && s.liveRouting.active) {
+      console.log(`[LIVE] demande ignorée (running=${s.running}, active=${s.liveRouting.active})`)
+      return
+    }
     const placements = s.livePlacements ?? s.result.placement?.placements
     if (!placements || placements.length === 0) {
       get().log('system', 'warn', '[LIVE] Aucun placement disponible — lancez d’abord la conception : le routage live réutilise le placement existant.')
       return
     }
     const nl = s.netlist
-    liveAbort = new AbortController()
+    const epoch = ++liveEpoch // la génération précédente (flux zombie éventuel) est révoquée
+    const myAbort = new AbortController()
+    liveAbort = myAbort
     liveFlush()
     liveStreamDone = false
     liveSawComplete = false
@@ -423,12 +461,14 @@ export const useStudio = create<StudioState>((set, get) => ({
      * réglable ×0.5 … ×4 en plein vol, sans négocier avec le serveur. */
     let failed = false
     try {
+      console.log(`[LIVE] fetch → /api/routing/live (pacing ${pacingMs} ms) — ${placements.length} composants`)
       const res = await fetch('/api/routing/live', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ netlist: nl, placements, pacingMs }),
         signal: liveAbort.signal,
       })
+      console.log(`[LIVE] réponse flux : HTTP ${res.status}, body=${!!res.body}`)
       if (!res.ok || !res.body) throw new Error(`flux indisponible (HTTP ${res.status})`)
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -436,6 +476,7 @@ export const useStudio = create<StudioState>((set, get) => ({
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
+        if (epoch !== liveEpoch) return // session supplantée pendant le flux
         buf += decoder.decode(value, { stream: true })
         let sep: number
         while ((sep = buf.indexOf('\n\n')) >= 0) {
@@ -445,6 +486,7 @@ export const useStudio = create<StudioState>((set, get) => ({
           if (!line) continue
           let ev: LiveSseEvent
           try { ev = JSON.parse(line.slice(6)) as LiveSseEvent } catch { continue }
+          if (ev.t === 'complete') console.log('[LIVE] événement complete reçu — mise en file pour lecture')
           if (ev.t === 'segment' || ev.t === 'via') {
             const trace: TraceEvent = ev.t === 'segment'
               ? { type: 'segment', net: ev.net, segment: ev.segment }
@@ -463,7 +505,9 @@ export const useStudio = create<StudioState>((set, get) => ({
           }
         }
       }
+      console.log(`[LIVE] flux terminé (EOF) — queue restante : ${liveQueue.length}, complete joué : ${liveSawComplete}`)
     } catch (e) {
+      if (epoch !== liveEpoch) return // session supplantée — le nouveau flux gère tout
       failed = true
       const aborted = e instanceof DOMException && e.name === 'AbortError'
       get().log('system', aborted ? 'warn' : 'error',
@@ -473,8 +517,10 @@ export const useStudio = create<StudioState>((set, get) => ({
               : '[DEEPPCB] Flux de routage live interrompu par l’utilisateur.')
           : `[DEEPPCB] Échec du flux live : ${e instanceof Error ? e.message : 'erreur inconnue'}`)
     } finally {
-      liveAbort = null
+      console.log(`[LIVE] finally — failed=${failed}, stopReason=${liveStopReason}, queue=${liveQueue.length}, epochOK=${epoch === liveEpoch}`)
+      if (liveAbort === myAbort) liveAbort = null // ne touche pas au contrôleur d'une session plus récente
       liveStopReason = null
+      if (epoch !== liveEpoch) return // supplanté : la nouvelle session possède l'état
       if (failed) liveFinish() // flux mort → session fermée immédiatement
       else liveNoteStreamEnd() // la lecture locale peut encore drainer la file
     }
@@ -482,6 +528,7 @@ export const useStudio = create<StudioState>((set, get) => ({
 
   reset: () => {
     cancelFlag = false
+    liveEpoch++
     liveAbort?.abort()
     liveAbort = null
     liveFlush()
@@ -585,3 +632,17 @@ export const useStudio = create<StudioState>((set, get) => ({
     }
   },
 }))
+
+/* Hook de diagnostic E2E — introspection du store et du moteur de lecture
+ * depuis les tests navigateur (inoffensif en production). */
+if (typeof window !== 'undefined') {
+  ;(window as unknown as Record<string, unknown>).__nexusStore = useStudio
+  ;(window as unknown as Record<string, unknown>).__liveDebug = () => ({
+    queue: liveQueue.length,
+    timer: !!liveTimer,
+    streamDone: liveStreamDone,
+    sawComplete: liveSawComplete,
+    abort: !!liveAbort,
+    lastError: liveLastError,
+  })
+}

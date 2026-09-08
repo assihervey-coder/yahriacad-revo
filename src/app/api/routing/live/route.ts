@@ -73,6 +73,7 @@ export async function POST(req: NextRequest) {
 
       try {
         const total = netlist.nets.filter((n) => n.pins.length >= 2).length
+        console.log(`[LIVE-ROUTE] entrée — ${total} nets, pacing ${pacingMs} ms`)
         send({ t: 'hello', total, board: { w: netlist.board.w, h: netlist.board.h } })
         const routing = await routeAll(netlist, placements, DEFAULT_RULES, constraints, {
           pacingMs,
@@ -84,6 +85,7 @@ export async function POST(req: NextRequest) {
           onProgress: (p) => send({ t: 'progress', done: p.done, total: p.total, net: p.net, ok: p.ok }),
           shouldCancel: () => closed || req.signal.aborted,
         })
+        console.log(`[LIVE-ROUTE] fin routeAll — ${routing.routedNets}/${routing.totalNets} nets, closed=${closed}, signal.aborted=${req.signal.aborted}`)
         if (!closed) send({ t: 'complete', result: routing })
       } catch (e) {
         if (!closed) send({ t: 'error', message: e instanceof Error ? e.message : 'erreur inconnue' })

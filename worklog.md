@@ -105,3 +105,23 @@ Stage Summary:
 - Le routage n'est plus une boîte noire : il se REGARDE — le routeur serveur diffuse chaque piste/via en temps réel (SSE), le HUD raconte la phase du moteur, les viewers 2D/3D dessinent trait par trait avec lueur sur le net en cours.
 - Le flux serveur produit un résultat canonique complet (via-minimizer + plan de masse inclus) finalisé en analyse + export, sans relancer le pipeline.
 - Le pipeline local bénéficie du même affichage live pendant son étape de routage.
+
+---
+Task ID: 5
+Agent: Super Z (agent principal)
+Task: Vitesse du flux live réglable (×0.5/×1/×2/×4) + mode « nudge » chirurgical pendant le routage live — puis commit + push.
+
+Work Log:
+- studio-store.ts : moteur de LECTURE du flux live repensé — les événements SSE arrivent à leur rythme filaire (pacingMs 14→3 ms) et s'empilent dans une file ; la lecture (dessin trait par trait) est cadencée localement à BASE_TICK_MS/liveSpeed → vitesse réglable EN PLEIN VOL (setLiveSpeed ×0.5…×4), tempo ×1 = rythme DeepPCB d'origine (14 ms/événement).
+- Fin de flux à isolation totale : le backlog post-EOF se joue par RAFALES bornées (file/12 par tick) → finalisation rapide même quand le rendu 3D coûte ~100 ms/trace ; à épreuve d'exceptions (try/catch par tick — un événement défectueux ne tue plus la chaîne de lecture).
+- Génération de session (liveEpoch/livePumpEpoch) : toute session supplantée (stop, nudge, nouveau flux) perd son autorité — lecteur SSE attardé, finally résiduels et ticks de lecture se mutent SILENCIEUSEMENT au lieu de corrompre l'état ; stopLiveRouting clôture la session IMMÉDIATEMENT (HUD réactif) et protège le contrôleur d'abort de la session plus récente (myAbort).
+- liveNudge [Flux.ai × DeepPCB] : pendant un flux live, coupure par révocation d'époque, déplacement borné du composant (clamp carte, rot 90/270 prise en compte), puis RESTART FORCÉ (startLiveRouting(3, force)) — le routeur repart EN DIRECT sur la nouvelle géométrie ; finalisation canonique complète (SI + DRC/DFM + Gerber + firmware).
+- live-hud.tsx : sélecteur de vitesse ×0.5/×1/×2/×4 (titres explicites : ralenti/normal/×2/turbo timelapse), compteur « traces jouées », indication « Nudge live : cliquez un composant puis utilisez les flèches ».
+- board-viewer.tsx : popup de sélection bimode — « nudge live · re-route en direct » pendant un flux (flèches → liveNudge), « chirurgie ±2 mm » sinon (flèches → surgicalMove) ; hook de diagnostic __nexusEngine (projection 3D→écran pour l'E2E) et __nexusStore/__liveDebug (introspection file/epoch/erreurs).
+- Corruptions d'état éliminées au passage (détectées par l'E2E headless) : session zombie quand le nudge tombe sur une réponse SSE déjà bufferisée (abort sans rejet → le restart était ignoré par le garde-fou active=true, backlog dans les limbes) — l'epoch rend ce cas impossible.
+- Verifications : tsc src/ propre ; test-engine TOUS LES TESTS PASSENT ; E2E complet : ralenti ×0.5 mesuré (6 traces/s vs ~10/s à ×1), turbo ×4 (flux achevé, finalisation régénérée), nudge live complet (U1 déplacé −2 mm → « Flux coupé » → « Flux ouvert » → « Routage live terminé en 8.0 s — 24/28 nets · 61 vias (−6) · DFM 84/100 »), zéro erreur console.
+
+Stage Summary:
+- Le routage live est devenu un INSTRUMENT : on le regarde au ralenti, on l'accélère en timelapse, et on INTERVIENT pendant le flux — un nudge de 2 mm et le routeur repart en direct.
+- Robustesse structurelle : file de lecture + époques de session = plus aucun état corrompu possible entre deux flux.
+- Le pipeline local profite des deux (ses traces passent par la même file réglable).

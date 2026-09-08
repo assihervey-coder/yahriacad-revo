@@ -210,6 +210,10 @@ export default function BoardViewer() {
       scene, camera, renderer, controls, compGroup, traceGroup, heatMesh, keepGroup, pourMesh, pourMeshTop,
       boardW: 60, boardH: 45, raycaster, targetCamPos: null,
     }
+    // Hook de diagnostic E2E (inoffensif en production) — pilotage du viewer depuis les tests
+    if (typeof window !== 'undefined') {
+      ;(window as unknown as Record<string, unknown>).__nexusEngine = engineRef.current
+    }
 
     let raf = 0
     const animate = () => {
@@ -599,3 +603,5 @@ export default function BoardViewer() {
     </div>
   )
 }
+
+// hmr-probe 1788904281
