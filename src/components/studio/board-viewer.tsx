@@ -62,6 +62,23 @@ function heatColor(t: number): [number, number, number] {
   return [255, 250, 210]
 }
 
+/** Vide un groupe three.js en disposant TOUTES les ressources GPU — sans ce
+ *  dispose, chaque reconstruction du traceGroup (à chaque trace du flux live !)
+ *  fuit géométries et matériaux : la mémoire GPU explose, le contexte WebGL se
+ *  perd (« Context Lost ») et l'onglet se fige après quelques sessions. */
+function disposeGroupChildren(g: THREE.Group) {
+  for (const child of g.children) {
+    child.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (mesh.geometry) mesh.geometry.dispose()
+      const m = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined
+      if (Array.isArray(m)) m.forEach((x) => x.dispose())
+      else m?.dispose()
+    })
+  }
+  g.clear()
+}
+
 export default function BoardViewer() {
   const mountRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<{
@@ -88,7 +105,9 @@ export default function BoardViewer() {
   const setViewer = useStudio((s) => s.setViewer)
   const surgicalMove = useStudio((s) => s.surgicalMove)
   const liveNudge = useStudio((s) => s.liveNudge)
+  const undoSurgical = useStudio((s) => s.undoSurgical)
   const surgicalBusy = useStudio((s) => s.surgicalBusy)
+  const historyLen = useStudio((s) => s.placementHistory.length)
   const pipelineRunning = useStudio((s) => s.running)
   const liveRoutes = useStudio((s) => s.liveRoutes)
   const liveActive = useStudio((s) => s.liveRouting.active)
@@ -97,6 +116,49 @@ export default function BoardViewer() {
 
   /** null = test en cours · true = WebGL OK · false = repli 2D logiciel */
   const [webglOk, setWebglOk] = useState<boolean | null>(null)
+
+  /* ---------------- Nudge clavier [sans popup] ----------------
+   * Sélectionner un composant puis piloter au clavier : flèches = pas fin
+   * 0,5 mm (Maj = pas chirurgical 2 mm). Pendant un flux live → nudge live
+   * (le routeur repart en direct), sinon chirurgie classique. Tout est lu
+   * via getState() → un seul abonnement, jamais de closure périmée. */
+  useEffect(() => {
+    const isTyping = () => {
+      const el = document.activeElement as HTMLElement | null
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (isTyping()) return
+      const s = useStudio.getState()
+      // Ctrl/Cmd+Z — undo multi-niveaux chirurgical (hors flux live)
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+        if (!s.running && !s.surgicalBusy && !s.liveRouting.active && s.placementHistory.length > 0) {
+          e.preventDefault()
+          void s.undoSurgical()
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        if (s.viewer.selectedRef) s.setViewer({ selectedRef: null })
+        return
+      }
+      const ref = s.viewer.selectedRef
+      if (!ref || s.surgicalBusy || s.running) return
+      const step = e.shiftKey ? 2 : 0.5
+      let dx = 0
+      let dy = 0
+      if (e.key === 'ArrowUp') dy = -step
+      else if (e.key === 'ArrowDown') dy = step
+      else if (e.key === 'ArrowLeft') dx = -step
+      else if (e.key === 'ArrowRight') dx = step
+      else return
+      e.preventDefault() // un nudge n'est jamais un scroll de page
+      if (s.liveRouting.active) void s.liveNudge(ref, dx, dy)
+      else void s.surgicalMove(ref, dx, dy)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   /* ---------------- Initialisation de la scène ---------------- */
   useEffect(() => {
@@ -292,7 +354,7 @@ export default function BoardViewer() {
     if (!eng) return
     const { boardW: W, boardH: H } = eng
     const list: PlacedComponent[] = placements ?? []
-    eng.compGroup.clear()
+    disposeGroupChildren(eng.compGroup)
     if (!placements) return
 
     for (const p of list) {
@@ -333,7 +395,7 @@ export default function BoardViewer() {
     const eng = engineRef.current
     if (!eng) return
     const { boardW: W, boardH: H } = eng
-    eng.traceGroup.clear()
+    disposeGroupChildren(eng.traceGroup)
     const routes: Route[] = liveActive ? liveRoutes : (result.routing?.routes ?? [])
     if (!routes.length) return
     const netCls = new Map(netlist.nets.map((n) => [n.name, n.cls]))
@@ -457,7 +519,7 @@ export default function BoardViewer() {
   useEffect(() => {
     const eng = engineRef.current
     if (!eng) return
-    eng.keepGroup.clear()
+    disposeGroupChildren(eng.keepGroup)
     const constraints = extractConstraints(netlist)
     const { boardW: W, boardH: H } = eng
     for (const cst of constraints.filter((c) => c.kind === 'keepout')) {
@@ -586,6 +648,22 @@ export default function BoardViewer() {
               <button aria-label="Déplacer à gauche" disabled={surgicalBusy || pipelineRunning} onClick={() => (liveActive ? void liveNudge(viewer.selectedRef!, -2, 0) : void surgicalMove(viewer.selectedRef!, -2, 0))} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">←</button>
               <button aria-label="Déplacer vers le bas" disabled={surgicalBusy || pipelineRunning} onClick={() => (liveActive ? void liveNudge(viewer.selectedRef!, 0, 2) : void surgicalMove(viewer.selectedRef!, 0, 2))} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">↓</button>
               <button aria-label="Déplacer à droite" disabled={surgicalBusy || pipelineRunning} onClick={() => (liveActive ? void liveNudge(viewer.selectedRef!, 2, 0) : void surgicalMove(viewer.selectedRef!, 2, 0))} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">→</button>
+            </div>
+            {/* Undo multi-niveaux [Flux.ai] — remonte la pile des déplacements */}
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <button
+                onClick={() => void undoSurgical()}
+                disabled={surgicalBusy || pipelineRunning || liveActive || historyLen === 0}
+                title={historyLen > 0 ? `Annuler le dernier déplacement (${historyLen} niveau(x) disponibles)` : 'Aucun déplacement à annuler'}
+                data-testid="undo-surgical"
+                className="rounded border border-neutral-700 bg-black/50 px-1.5 py-0.5 text-[10px] text-neutral-300 transition-colors hover:bg-emerald-900/40 hover:text-emerald-200 disabled:opacity-30"
+              >
+                ↩ annuler
+              </button>
+              <span className="text-[9px] text-neutral-500">{historyLen > 0 ? `${historyLen} niveau(x)` : ''}</span>
+            </div>
+            <div className="mt-0.5 text-[9px] leading-snug text-neutral-500">
+              clavier : ← ↑ ↓ → 0,5 mm · <span className="text-neutral-400">Maj = 2 mm</span> · Échap ferme · Ctrl+Z annule
             </div>
             {surgicalBusy && <div className="mt-1 text-[9px] text-emerald-400">{liveActive ? 'reprise du flux…' : 're-routage incrémental…'}</div>}
           </div>

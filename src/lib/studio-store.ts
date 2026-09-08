@@ -58,8 +58,8 @@ export interface LiveRoutingState {
   netsDone: number
   currentNet: string
   traces: number
-  /** 'server' = flux SSE du routeur serveur · 'pipeline' = passe de routage du pipeline local */
-  source: 'server' | 'pipeline' | 'none'
+  /** 'server' = flux SSE du routeur serveur · 'pipeline' = passe du pipeline local · 'replay' = relecture d'une session */
+  source: 'server' | 'pipeline' | 'replay' | 'none'
   /** Dernier point posé — la « tête » du routeur, affichée avec une lueur */
   lastPoint: { x: number; y: number } | null
 }
@@ -104,6 +104,10 @@ interface StudioState {
   liveRoutes: Route[]
   /** Vitesse de lecture du flux live : 0.5 | 1 | 2 | 4 */
   liveSpeed: number
+  /** Pile d'instantanés de placement — undo multi-niveaux chirurgical (plafonnée à 20) */
+  placementHistory: PlacedComponent[][]
+  /** Une session de routage enregistrée peut être rejouée (mode replay) */
+  canReplay: boolean
   setProject: (id: string) => void
   addCustomNetlist: (nl: Netlist) => void
   surgicalMove: (ref: string, dx: number, dy: number) => Promise<void>
@@ -119,7 +123,11 @@ interface StudioState {
   setLiveSpeed: (v: number) => void
   /** Nudge chirurgical PENDANT un flux live : coupe le flux, déplace, repart en direct */
   liveNudge: (ref: string, dx: number, dy: number) => Promise<void>
-  beginLiveRouting: (source: 'server' | 'pipeline') => void
+  /** Rejoue la dernière session de routage enregistrée, au tempo local choisi */
+  replayLastRouting: () => void
+  /** Annule le dernier déplacement chirurgical (multi-niveaux : Ctrl+Z répété) */
+  undoSurgical: () => Promise<void>
+  beginLiveRouting: (source: 'server' | 'pipeline' | 'replay') => void
   pushLiveTrace: (ev: TraceEvent) => void
   dropLiveNet: (net: string) => void
   setLiveProgress: (p: { done: number; total: number; net: string; ok: boolean }) => void
@@ -156,6 +164,12 @@ let liveLastError: string | null = null
  *  se mute silencieusement au lieu de corrompre la session courante. */
 let liveEpoch = 0
 let livePumpEpoch = -1
+
+/** Enregistrement de la dernière session de routage (traces, progression,
+ *  phases) pour le mode « replay » — rempli à la volée dans liveEnqueue,
+ *  vidé à chaque nouvelle session (beginLiveRouting). */
+let liveRecording: LiveQueued[] = []
+let liveReplaying = false
 
 /** Joue un événement de la file : trace visible, métadonnées HUD, ou finalisation. */
 function liveApplyQueued(q: LiveQueued) {
@@ -198,9 +212,9 @@ function livePump() {
   liveTimer = setTimeout(() => {
     liveTimer = null
     try {
-      const batch = liveStreamDone
+      const batch = liveStreamDone && !liveReplaying
         ? Math.min(liveQueue.length, Math.max(1, Math.ceil(liveQueue.length / 12)))
-        : 1
+        : 1 // replay : tout se joue à l'unité — c'est précisément le but de le regarder
       for (let i = 0; i < batch; i++) {
         const q = liveQueue.shift()
         if (!q) break
@@ -219,6 +233,12 @@ function livePump() {
 
 function liveEnqueue(q: LiveQueued) {
   livePumpEpoch = liveEpoch
+  if (!liveReplaying && q.k !== 'complete') {
+    // Enregistrement pour le replay — l'événement complete n'est PAS rejoué :
+    // à la fin d'un replay le viewer retombe sur result.routing (état canonique).
+    liveRecording.push(q)
+    if (liveRecording.length > 8000) liveRecording.shift()
+  }
   liveQueue.push(q)
   livePump()
 }
@@ -247,6 +267,43 @@ async function liveDrained() {
   }
 }
 
+/** Re-routage incrémental partagé [Flux.ai surgical_editor] : la géométrie de
+ *  livePlacements vient d'être éditée (chirurgie, undo) ; on re-route, on
+ *  recalcule SI + DRC/DFM + export — SANS toucher au placement ni à la
+ *  thermique. Utilisé par surgicalMove ET undoSurgical. */
+async function rerouteAfterPlacementEdit(label: string): Promise<boolean> {
+  const t0 = Date.now()
+  try {
+    const st = useStudio.getState()
+    const placements = st.livePlacements!
+    const nl = st.netlist
+    const constraints = extractConstraints(nl)
+    const routing = await routeAll(nl, placements, DEFAULT_RULES, constraints)
+    const routeMap = new Map(routing.routes.map((r) => [r.net, r]))
+    const si = analyzeSi(nl, routeMap, (cls) => DEFAULT_RULES.widths[cls as keyof typeof DEFAULT_RULES.widths] ?? 0.25, constraints)
+    const drc = runDrc(nl, placements, routing, st.result.thermal!, DEFAULT_RULES, constraints)
+    const dfm = runDfm(nl, placements, routing, DEFAULT_RULES)
+    const gerber = generateGerber(nl, placements, routing)
+    gerber.files.push(...generateFirmwareBridge(nl).files)
+    useStudio.setState((s2) => ({ result: { ...s2.result, routing, si, drc, dfm, gerber } }))
+    useStudio.getState().log('system', 'success',
+      `${label} Terminé en ${Date.now() - t0} ms — ${routing.routedNets}/${routing.totalNets} nets · ${routing.viaCount} vias${routing.viasRemoved ? ` (−${routing.viasRemoved})` : ''} · DRC ${drc.errors} erreur(s) · placement et thermique préservés`)
+    return true
+  } catch (e) {
+    useStudio.getState().log('system', 'error', `${label} échec : ${e instanceof Error ? e.message : 'erreur inconnue'}`)
+    return false
+  }
+}
+
+/** Pousse l'état de placement courant sur la pile d'undo (plafonnée à 20). */
+function pushPlacementHistory() {
+  const s = useStudio.getState()
+  if (!s.livePlacements) return
+  useStudio.setState((s2) => ({
+    placementHistory: [...s2.placementHistory.slice(-19), s2.livePlacements!.map((p) => ({ ...p }))],
+  }))
+}
+
 export const useStudio = create<StudioState>((set, get) => ({
   netlistId: NETLISTS[0].id,
   netlist: NETLISTS[0],
@@ -266,11 +323,14 @@ export const useStudio = create<StudioState>((set, get) => ({
   liveRouting: idleLive(),
   liveRoutes: [],
   liveSpeed: 1,
+  placementHistory: [],
+  canReplay: false,
 
   setProject: (id) => {
     const nl = get().customNetlists.find((x) => x.id === id) ?? getNetlist(id)
     liveEpoch++
     liveFlush()
+    liveRecording = [] // le replay appartient au projet précédent
     set({
       netlistId: id,
       netlist: nl,
@@ -280,6 +340,8 @@ export const useStudio = create<StudioState>((set, get) => ({
       costHistory: [],
       plan: null,
       constraintsCount: extractConstraints(nl).length,
+      placementHistory: [],
+      canReplay: false,
       logs: [{ ts: Date.now(), stage: 'system', level: 'info', msg: `Projet chargé : ${nl.name} — ${nl.description}` }],
       viewer: { ...get().viewer, selectedRef: null },
       liveRouting: idleLive(),
@@ -300,44 +362,28 @@ export const useStudio = create<StudioState>((set, get) => ({
   surgicalMove: async (ref, dx, dy) => {
     const s = get()
     if (s.running || s.surgicalBusy || !s.livePlacements || !s.result.thermal) return
+    pushPlacementHistory() // undo multi-niveaux — l'état AVANT le déplacement
     set({ surgicalBusy: true, livePlacements: s.livePlacements.map((p) => p.ref === ref ? { ...p, x: p.x + dx, y: p.y + dy } : p) })
-    const t0 = Date.now()
     get().log('system', 'agent', `[CHIRURGIE] ${ref} déplacé de (${dx > 0 ? '+' : ''}${dx}, ${dy > 0 ? '+' : ''}${dy}) mm — re-routage incrémental…`)
     await new Promise((r) => setTimeout(r, 40)) // laisse le viewer rafraîchir
-    try {
-      const placements = get().livePlacements!
-      const nl = get().netlist
-      // Ramène le composant dans la carte si le déplacement le fait sortir
-      const clamped = placements.map((p) => {
-        const c = nl.components.find((x) => x.ref === p.ref)
-        if (!c || p.ref !== ref) return p
-        const swap = p.rot === 90 || p.rot === 270
-        const w = swap ? c.footprint.h : c.footprint.w
-        const h = swap ? c.footprint.w : c.footprint.h
-        return {
-          ...p,
-          x: Math.min(nl.board.w - w / 2 - 0.4, Math.max(w / 2 + 0.4, p.x)),
-          y: Math.min(nl.board.h - h / 2 - 0.4, Math.max(h / 2 + 0.4, p.y)),
-        }
-      })
-      const constraints = extractConstraints(nl)
-      const routing = await routeAll(nl, clamped, DEFAULT_RULES, constraints)
-      const routeMap = new Map(routing.routes.map((r) => [r.net, r]))
-      const si = analyzeSi(nl, routeMap, (cls) => DEFAULT_RULES.widths[cls as keyof typeof DEFAULT_RULES.widths] ?? 0.25, constraints)
-      const drc = runDrc(nl, clamped, routing, get().result.thermal!, DEFAULT_RULES, constraints)
-      const dfm = runDfm(nl, clamped, routing, DEFAULT_RULES)
-      const gerber = generateGerber(nl, clamped, routing)
-      gerber.files.push(...generateFirmwareBridge(nl).files)
-      set((st) => ({
-        livePlacements: clamped,
-        result: { ...st.result, routing, si, drc, dfm, gerber },
-        surgicalBusy: false,
-      }))
-      get().log('system', 'success', `[CHIRURGIE] Terminé en ${Date.now() - t0} ms — ${routing.routedNets}/${routing.totalNets} nets · ${routing.viaCount} vias${routing.viasRemoved ? ` (−${routing.viasRemoved})` : ''} · DRC ${drc.errors} erreur(s) · placement et thermique préservés`)
-    } catch (e) {
-      set({ surgicalBusy: false })
-      get().log('system', 'error', `[CHIRURGIE] échec : ${e instanceof Error ? e.message : 'erreur inconnue'}`)
-    }
+    // Ramène le composant dans la carte si le déplacement le fait sortir
+    const nl = get().netlist
+    const clamped = get().livePlacements!.map((p) => {
+      if (p.ref !== ref) return p
+      const c = nl.components.find((x) => x.ref === ref)
+      if (!c) return p
+      const swap = p.rot === 90 || p.rot === 270
+      const w = swap ? c.footprint.h : c.footprint.w
+      const h = swap ? c.footprint.w : c.footprint.h
+      return {
+        ...p,
+        x: Math.min(nl.board.w - w / 2 - 0.4, Math.max(w / 2 + 0.4, p.x)),
+        y: Math.min(nl.board.h - h / 2 - 0.4, Math.max(h / 2 + 0.4, p.y)),
+      }
+    })
+    set({ livePlacements: clamped })
+    await rerouteAfterPlacementEdit('[CHIRURGIE]')
+    set({ surgicalBusy: false })
   },
 
   log: (stage, level, msg) =>
@@ -347,10 +393,16 @@ export const useStudio = create<StudioState>((set, get) => ({
    * Deux sources de flux : le routeur SERVEUR (SSE, rythmé pacingMs) ou la
    * passe de routage du pipeline local. Les traces s'accumulent net par
    * net dans liveRoutes — les viewers les dessinent au fil de l'eau. */
-  beginLiveRouting: (source) =>
+  beginLiveRouting: (source) => {
+    // Garde AVANT tout effet de bord : l'orchestrateur ré-émet onStage('routing','running')
+    // à CHAQUE progression de net — sans ce garde, l'enregistrement du replay serait
+    // effacé à chaque net du pipeline et ne garderait que les 2 derniers événements.
+    if (useStudio.getState().liveRouting.active) return
+    liveRecording = [] // nouvelle session → l'enregistrement du replay repart à zéro
     set((s) => (s.liveRouting.active
       ? {}
-      : { liveRoutes: [], liveRouting: { active: true, phase: 'greedy' as LivePhase, netsTotal: 0, netsDone: 0, currentNet: '—', traces: 0, source, lastPoint: null } })),
+      : { liveRoutes: [], liveRouting: { active: true, phase: 'greedy' as LivePhase, netsTotal: 0, netsDone: 0, currentNet: '—', traces: 0, source, lastPoint: null } }))
+  },
 
   pushLiveTrace: (ev) =>
     set((s) => {
@@ -377,8 +429,14 @@ export const useStudio = create<StudioState>((set, get) => ({
   setLivePhase: (phase) =>
     set((s) => ({ liveRouting: { ...s.liveRouting, phase } })),
 
-  endLiveRouting: () =>
-    set({ liveRouting: idleLive(), liveRoutes: [] }),
+  endLiveRouting: () => {
+    liveReplaying = false
+    set({
+      liveRouting: idleLive(),
+      liveRoutes: [],
+      canReplay: liveRecording.some((q) => q.k === 'trace'), // une session interrompue est rejouable aussi
+    })
+  },
 
   stopLiveRouting: (reason = 'user') => {
     liveStopReason = reason
@@ -408,6 +466,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   liveNudge: async (ref, dx, dy) => {
     const s = get()
     if (s.running || s.surgicalBusy || !s.livePlacements) return
+    pushPlacementHistory() // undo multi-niveaux — l'état AVANT le nudge
     set({ surgicalBusy: true })
     get().log('system', 'agent', `[NUDGE LIVE] ${ref} déplacé de (${dx > 0 ? '+' : ''}${dx}, ${dy > 0 ? '+' : ''}${dy}) mm — coupure du flux puis re-routage en direct…`)
     // stopLiveRouting révoque la génération en cours : la vieille session ne
@@ -432,6 +491,53 @@ export const useStudio = create<StudioState>((set, get) => ({
     })
     set({ livePlacements: clamped, surgicalBusy: false })
     void get().startLiveRouting(3, true) // le routeur repart EN DIRECT, trait par trait
+  },
+
+  /* ---------------- Replay de la dernière session [DeepPCB ×2] --------------
+   * La session (traces, progression, phases) a été enregistrée à la volée ;
+   * le replay la rejoue via le MÊME moteur de lecture (file + tempo local),
+   * donc au ralenti ou en timelapse, SANS recontacter le routeur. La vitesse
+   * reste réglable en plein vol, et l'interruption reste propre. À la fin,
+   * le viewer retombe sur result.routing — l'état final canonique. */
+  replayLastRouting: () => {
+    const s = get()
+    if (s.running || s.surgicalBusy || s.liveRouting.active) return
+    const events = liveRecording.filter((q) => q.k !== 'complete')
+    if (!events.some((q) => q.k === 'trace')) {
+      s.log('system', 'warn', '[REPLAY] Aucune session de routage enregistrée — lancez d’abord un routage (live ou pipeline).')
+      return
+    }
+    liveEpoch++ // révoque toute session résiduelle
+    liveFlush()
+    liveReplaying = true
+    liveStreamDone = false
+    liveSawComplete = false
+    liveT0 = Date.now()
+    get().beginLiveRouting('replay') // vide liveRoutes + repart sur un enregistrement neuf
+    liveRecording = events // l'enregistrement survit à la relecture → replay rejouable à volonté
+    livePumpEpoch = liveEpoch
+    liveQueue.push(...events)
+    liveStreamDone = true // fin de flux logique : la lecture se clôturera d'elle-même
+    s.log('system', 'agent', `[REPLAY] Relecture de la dernière session — ${events.length} événements à ×${s.liveSpeed} (réglable en plein vol)…`)
+    livePump()
+  },
+
+  /* ---------------- Undo multi-niveaux chirurgical [Flux.ai] ----------------
+   * Chaque déplacement (popup, clavier, nudge live) pousse un instantané ;
+   * Ctrl+Z ou le bouton remonte la pile et re-route à chaque étape. Le
+   * re-routage réutilise exactement celui de la chirurgie — l'état retrouvé
+   * est donc complet (SI + DRC/DFM + export). */
+  undoSurgical: async () => {
+    const s = get()
+    if (s.running || s.surgicalBusy || s.liveRouting.active || !s.livePlacements || !s.result.thermal) return
+    const hist = s.placementHistory
+    if (hist.length === 0) return
+    const prev = hist[hist.length - 1]
+    set({ placementHistory: hist.slice(0, -1), surgicalBusy: true, livePlacements: prev.map((p) => ({ ...p })) })
+    s.log('system', 'agent', `[UNDO] Retour au placement précédent (${hist.length - 1} annulation(s) restante(s)) — re-routage incrémental…`)
+    await new Promise((r) => setTimeout(r, 40))
+    await rerouteAfterPlacementEdit('[UNDO]')
+    set({ surgicalBusy: false })
   },
 
   startLiveRouting: async (pacingMs = 3, force = false) => {
@@ -533,7 +639,8 @@ export const useStudio = create<StudioState>((set, get) => ({
     liveAbort = null
     liveFlush()
     liveStreamDone = false
-    set({ stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null, running: false, cancelled: false, liveRouting: idleLive(), liveRoutes: [] })
+    liveRecording = []
+    set({ stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null, running: false, cancelled: false, liveRouting: idleLive(), liveRoutes: [], placementHistory: [], canReplay: false })
   },
 
   cancel: () => {
@@ -549,7 +656,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     set({
       running: true, cancelled: false,
       stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null,
-      liveRouting: idleLive(), liveRoutes: [],
+      liveRouting: idleLive(), liveRoutes: [], placementHistory: [], canReplay: false,
     })
     const t0 = Date.now()
     get().log('system', 'info', `═══ DÉBUT DE CONCEPTION AUTONOME — ${nl.name} ═══`)
@@ -577,7 +684,7 @@ export const useStudio = create<StudioState>((set, get) => ({
 
       const routeRate = result.routing.routedNets / Math.max(1, result.routing.totalNets)
       const status = result.drc.errors === 0 && routeRate >= 0.98 ? 'success' : routeRate > 0.8 ? 'partial' : 'error'
-      set({ result, running: false, liveRouting: idleLive(), liveRoutes: [] })
+      set({ result, running: false, liveRouting: idleLive(), liveRoutes: [], canReplay: liveRecording.some((q) => q.k === 'trace') })
       get().log('system', status === 'success' ? 'success' : 'warn',
         `═══ CONCEPTION TERMINÉE en ${((Date.now() - t0) / 1000).toFixed(1)} s — DFM ${result.dfm.score}/100, ${result.drc.errors} erreur(s) DRC ═══`)
 
@@ -644,5 +751,7 @@ if (typeof window !== 'undefined') {
     sawComplete: liveSawComplete,
     abort: !!liveAbort,
     lastError: liveLastError,
+    recording: liveRecording.length,
+    replaying: liveReplaying,
   })
 }

@@ -125,3 +125,23 @@ Stage Summary:
 - Le routage live est devenu un INSTRUMENT : on le regarde au ralenti, on l'accélère en timelapse, et on INTERVIENT pendant le flux — un nudge de 2 mm et le routeur repart en direct.
 - Robustesse structurelle : file de lecture + époques de session = plus aucun état corrompu possible entre deux flux.
 - Le pipeline local profite des deux (ses traces passent par la même file réglable).
+
+---
+Task ID: 6
+Agent: Super Z (agent principal)
+Task: Nudge au clavier (sans popup) + mode « replay » de la dernière session de routage + undo multi-niveaux chirurgical — puis commit + push.
+
+Work Log:
+- Nudge clavier [sans popup] : écouteur keydown global dans board-viewer.tsx (abonné une fois, tout lu via getState() → zéro closure périmée) — flèches = pas fin 0,5 mm, Maj = pas chirurgical 2 mm ; bascule automatique liveNudge (flux actif) / surgicalMove (sinon) ; Échap déselectionne ; Ctrl/Cmd+Z annule ; garde anti-champs texte (INPUT/TEXTAREA/SELECT/contentEditable) et preventDefault anti-scroll.
+- Replay [DeepPCB ×2] : enregistrement de session à la volée dans liveEnqueue (traces + progression + phases, SANS complete — la finalisation canonique vit déjà dans result.routing), plafonné à 8 000 événements ; replayLastRouting rejoue via le MÊME moteur de lecture (file + tempo local) → vitesse réglable avant et PENDANT la relecture, interruption propre, relecture re-jouable à volonté (l'enregistrement survit au replay) ; à la fin, le viewer retombe sur result.routing — l'état final canonique ; source 'replay' ajoutée au LiveRoutingState, HUD dédié.
+- HUD : hors flux, barre violette « REPLAY · dernière session · vitesse » (canReplay réactif) ; pendant un replay, le HUD existant affiche la mention REPLAY + une note « aucun serveur sollicité » ; sélecteur de vitesse factorisé (SpeedSelector).
+- Undo multi-niveaux [Flux.ai] : pile placementHistory (instantanés plafonnés à 20) poussée par surgicalMove, liveNudge ET les nudges clavier ; undoSurgical restaure l'instantané et relance le re-routage incrémental ; refactoring du re-routage post-édition en helper partagé rerouteAfterPlacementEdit (surgicalMove + undoSurgical = même code, SI + DRC/DFM + Gerber/firmware régénérés) ; bouton « ↩ annuler (N niveaux) » dans le popup + Ctrl+Z.
+- Deux VRAIS bugs détectés et corrigés par l'E2E :
+  1. beginLiveRouting effaçait l'enregistrement à CHAQUE appel — l'orchestrateur ré-émettant onStage('routing','running') à chaque progression de net, le replay du pipeline n'aurait gardé que 2 événements ; le garde de session précède désormais tout effet de bord (rec: 194 après pipeline, confirmé).
+  2. Fuite GPU critique du viewer 3D : traceGroup/compGroup/keepGroup étaient vidés sans dispose() — à chaque trace du flux live, des centaines de géométries/matériaux fuyaient ; après quelques sessions enchaînées (pipeline + live + replay), la mémoire GPU explosait, « THREE.WebGLRenderer: Context Lost », onglet figé. Correctif : disposeGroupChildren() (dispose géométries + matériaux avant clear) sur les trois groupes — le scénario complet (pipeline → live → replay ×4) repasse sans aucun gel.
+- Vérifications : tsc src/ propre ; test-engine TOUS LES TESTS PASSENT ; smoke SSE OK ; E2E navigateur complète : nudge clavier 0,5 mm (31 → 31.5 mm exact), Maj+flèche 2 mm, double Ctrl+Z retour à l'origine exacte via les 2 niveaux, nudge clavier PENDANT le flux live (« [NUDGE LIVE] U1 déplacé de (+0.5, 0) mm » → flux relancé en direct), replay ×4 puis ×2 avec 195/176 événements rejoués, relecture consécutive, bouton ↩ annulant un nudge fait pendant le live, zéro erreur page et console ; captures /tmp/replay-hud2.png + /tmp/kbd-popup-undo.png.
+
+Stage Summary:
+- Le studio est devenu un vrai poste de pilotage : les flèches du clavier sculptent la carte (0,5 mm au pas fin, 2 mm en chirurgical), en plein flux live comme au repos ; toute session de routage (live OU pipeline) peut être RE-vue au ralenti ou en timelapse sans recontacter le serveur ; chaque déplacement est annulable niveau par niveau (Ctrl+Z), même ceux faits pendant le live.
+- Dette structurelle réglée au passage : plus aucune fuite GPU dans le rendu three.js (dispose systématique), et l'enregistrement replay est immunisé aux rappels de progression du pipeline.
+
