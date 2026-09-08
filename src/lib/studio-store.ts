@@ -4,13 +4,15 @@
  */
 import { create } from 'zustand'
 import type {
-  AgentPlan, DesignResult, LogEntry, Netlist, PlacedComponent, StageId, StageState,
+  AgentPlan, DesignResult, LogEntry, Netlist, PlacedComponent, Route, RoutingSolution,
+  StageId, StageState, TraceSegment, Via,
 } from '@/lib/engine/types'
+import type { RouterPhase, TraceEvent } from '@/lib/engine/router'
 import { NETLISTS, getNetlist } from '@/lib/engine/netlists'
 import { runPipeline } from '@/lib/engine/orchestrator'
 import { extractConstraints } from '@/lib/engine/parser'
 import { routeAll } from '@/lib/engine/router'
-import { analyzeSi } from '@/lib/engine/simulator'
+import { analyzeSi, solveThermal } from '@/lib/engine/simulator'
 import { runDfm, runDrc } from '@/lib/engine/drc'
 import { generateGerber } from '@/lib/engine/gerber'
 import { generateFirmwareBridge } from '@/lib/engine/firmware'
@@ -45,6 +47,37 @@ export interface RunHistoryItem {
   createdAt: string
 }
 
+/* ---------------- Routage live [DeepPCB live_routing] ---------------- */
+
+export type LivePhase = RouterPhase | 'idle' | 'done'
+
+export interface LiveRoutingState {
+  active: boolean
+  phase: LivePhase
+  netsTotal: number
+  netsDone: number
+  currentNet: string
+  traces: number
+  /** 'server' = flux SSE du routeur serveur · 'pipeline' = passe de routage du pipeline local */
+  source: 'server' | 'pipeline' | 'none'
+  /** Dernier point posé — la « tête » du routeur, affichée avec une lueur */
+  lastPoint: { x: number; y: number } | null
+}
+
+const idleLive = (): LiveRoutingState => ({
+  active: false, phase: 'idle', netsTotal: 0, netsDone: 0,
+  currentNet: '—', traces: 0, source: 'none', lastPoint: null,
+})
+
+type LiveSseEvent =
+  | { t: 'hello'; total: number }
+  | { t: 'phase'; phase: RouterPhase }
+  | { t: 'progress'; done: number; total: number; net: string; ok: boolean }
+  | { t: 'segment'; net: string; segment: TraceSegment }
+  | { t: 'via'; net: string; via: Via }
+  | { t: 'complete'; result: RoutingSolution }
+  | { t: 'error'; message: string }
+
 interface StudioState {
   netlistId: string
   netlist: Netlist
@@ -67,6 +100,8 @@ interface StudioState {
     selectedRef: string | null
   }
   history: RunHistoryItem[]
+  liveRouting: LiveRoutingState
+  liveRoutes: Route[]
   setProject: (id: string) => void
   addCustomNetlist: (nl: Netlist) => void
   surgicalMove: (ref: string, dx: number, dy: number) => Promise<void>
@@ -76,9 +111,19 @@ interface StudioState {
   reset: () => void
   setViewer: (patch: Partial<StudioState['viewer']>) => void
   loadHistory: () => Promise<void>
+  /* Routage live [DeepPCB] */
+  startLiveRouting: (pacingMs?: number) => Promise<void>
+  stopLiveRouting: () => void
+  beginLiveRouting: (source: 'server' | 'pipeline') => void
+  pushLiveTrace: (ev: TraceEvent) => void
+  dropLiveNet: (net: string) => void
+  setLiveProgress: (p: { done: number; total: number; net: string; ok: boolean }) => void
+  setLivePhase: (phase: LivePhase) => void
+  endLiveRouting: () => void
 }
 
 let cancelFlag = false
+let liveAbort: AbortController | null = null
 
 export const useStudio = create<StudioState>((set, get) => ({
   netlistId: NETLISTS[0].id,
@@ -96,6 +141,8 @@ export const useStudio = create<StudioState>((set, get) => ({
   constraintsCount: 0,
   viewer: { mode: '3d', showTraces: true, showHeatmap: false, showComponents: true, selectedRef: null },
   history: [],
+  liveRouting: idleLive(),
+  liveRoutes: [],
 
   setProject: (id) => {
     const nl = get().customNetlists.find((x) => x.id === id) ?? getNetlist(id)
@@ -110,6 +157,8 @@ export const useStudio = create<StudioState>((set, get) => ({
       constraintsCount: extractConstraints(nl).length,
       logs: [{ ts: Date.now(), stage: 'system', level: 'info', msg: `Projet chargé : ${nl.name} — ${nl.description}` }],
       viewer: { ...get().viewer, selectedRef: null },
+      liveRouting: idleLive(),
+      liveRoutes: [],
     })
     void get().loadHistory()
   },
@@ -147,7 +196,7 @@ export const useStudio = create<StudioState>((set, get) => ({
         }
       })
       const constraints = extractConstraints(nl)
-      const routing = routeAll(nl, clamped, DEFAULT_RULES, constraints)
+      const routing = await routeAll(nl, clamped, DEFAULT_RULES, constraints)
       const routeMap = new Map(routing.routes.map((r) => [r.net, r]))
       const si = analyzeSi(nl, routeMap, (cls) => DEFAULT_RULES.widths[cls as keyof typeof DEFAULT_RULES.widths] ?? 0.25, constraints)
       const drc = runDrc(nl, clamped, routing, get().result.thermal!, DEFAULT_RULES, constraints)
@@ -169,9 +218,134 @@ export const useStudio = create<StudioState>((set, get) => ({
   log: (stage, level, msg) =>
     set((s) => ({ logs: [...s.logs.slice(-400), { ts: Date.now(), stage, level, msg }] })),
 
+  /* ---------------- Routage live [DeepPCB live_routing] ----------------
+   * Deux sources de flux : le routeur SERVEUR (SSE, rythmé pacingMs) ou la
+   * passe de routage du pipeline local. Les traces s'accumulent net par
+   * net dans liveRoutes — les viewers les dessinent au fil de l'eau. */
+  beginLiveRouting: (source) =>
+    set((s) => (s.liveRouting.active
+      ? {}
+      : { liveRoutes: [], liveRouting: { active: true, phase: 'greedy' as LivePhase, netsTotal: 0, netsDone: 0, currentNet: '—', traces: 0, source, lastPoint: null } })),
+
+  pushLiveTrace: (ev) =>
+    set((s) => {
+      if (!s.liveRouting.active) return {}
+      const routes = [...s.liveRoutes]
+      const i = routes.findIndex((r) => r.net === ev.net)
+      const base: Route = i >= 0
+        ? { ...routes[i], segments: [...routes[i].segments], vias: [...routes[i].vias] }
+        : { net: ev.net, segments: [], vias: [], lengthMm: 0, routed: true }
+      if (ev.type === 'segment') base.segments.push(ev.segment)
+      else base.vias.push(ev.via)
+      if (i >= 0) routes[i] = base
+      else routes.push(base)
+      const last = ev.type === 'segment' ? ev.segment.pts[ev.segment.pts.length - 1] : { x: ev.via.x, y: ev.via.y }
+      return { liveRoutes: routes, liveRouting: { ...s.liveRouting, traces: s.liveRouting.traces + 1, lastPoint: last } }
+    }),
+
+  dropLiveNet: (net) =>
+    set((s) => (s.liveRouting.active ? { liveRoutes: s.liveRoutes.filter((r) => r.net !== net) } : {})),
+
+  setLiveProgress: (p) =>
+    set((s) => ({ liveRouting: { ...s.liveRouting, netsDone: p.done, netsTotal: p.total || s.liveRouting.netsTotal, currentNet: p.net } })),
+
+  setLivePhase: (phase) =>
+    set((s) => ({ liveRouting: { ...s.liveRouting, phase } })),
+
+  endLiveRouting: () =>
+    set({ liveRouting: idleLive(), liveRoutes: [] }),
+
+  stopLiveRouting: () => {
+    liveAbort?.abort()
+  },
+
+  startLiveRouting: async (pacingMs = 14) => {
+    const s = get()
+    if (s.running || s.liveRouting.active) return
+    const placements = s.livePlacements ?? s.result.placement?.placements
+    if (!placements || placements.length === 0) {
+      get().log('system', 'warn', '[LIVE] Aucun placement disponible — lancez d’abord la conception : le routage live réutilise le placement existant.')
+      return
+    }
+    const nl = s.netlist
+    liveAbort = new AbortController()
+    get().beginLiveRouting('server')
+    get().log('system', 'agent', '[DEEPPCB] Flux de routage live ouvert — le routeur serveur diffuse chaque piste au fil de sa pose…')
+    const t0 = Date.now()
+    let finished = false
+    try {
+      const res = await fetch('/api/routing/live', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ netlist: nl, placements, pacingMs }),
+        signal: liveAbort.signal,
+      })
+      if (!res.ok || !res.body) throw new Error(`flux indisponible (HTTP ${res.status})`)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        let sep: number
+        while ((sep = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, sep)
+          buf = buf.slice(sep + 2)
+          const line = frame.split('\n').find((l) => l.startsWith('data: '))
+          if (!line) continue
+          let ev: LiveSseEvent
+          try { ev = JSON.parse(line.slice(6)) as LiveSseEvent } catch { continue }
+          if (ev.t === 'segment' || ev.t === 'via') {
+            const trace: TraceEvent = ev.t === 'segment'
+              ? { type: 'segment', net: ev.net, segment: ev.segment }
+              : { type: 'via', net: ev.net, via: ev.via }
+            get().pushLiveTrace(trace)
+          } else if (ev.t === 'progress') {
+            get().setLiveProgress(ev)
+            if (!ev.ok) get().dropLiveNet(ev.net) // retire les traces fantômes d'un net en échec
+          } else if (ev.t === 'phase') {
+            get().setLivePhase(ev.phase)
+          } else if (ev.t === 'hello') {
+            get().setLiveProgress({ done: 0, total: ev.total, net: '—', ok: true })
+          } else if (ev.t === 'complete') {
+            finished = true
+            const routing = ev.result
+            // Finalisation locale : même chaîne d'analyse que le pipeline
+            const constraints = extractConstraints(nl)
+            const routeMap = new Map(routing.routes.map((r) => [r.net, r]))
+            const si = analyzeSi(nl, routeMap, (cls) => DEFAULT_RULES.widths[cls as keyof typeof DEFAULT_RULES.widths] ?? 0.25, constraints)
+            const thermal = get().result.thermal ?? solveThermal(nl, placements)
+            const drc = runDrc(nl, placements, routing, thermal, DEFAULT_RULES, constraints)
+            const dfm = runDfm(nl, placements, routing, DEFAULT_RULES)
+            const gerber = generateGerber(nl, placements, routing)
+            gerber.files.push(...generateFirmwareBridge(nl).files)
+            set((st) => ({ result: { ...st.result, routing, si, thermal, drc, dfm, gerber } }))
+            get().log('system', 'success',
+              `[DEEPPCB] Routage live terminé en ${((Date.now() - t0) / 1000).toFixed(1)} s — ${routing.routedNets}/${routing.totalNets} nets · ${routing.viaCount} vias${routing.viasRemoved ? ` (−${routing.viasRemoved})` : ''} · DFM ${dfm.score}/100 — analyse + export régénérés`)
+          } else if (ev.t === 'error') {
+            throw new Error(ev.message)
+          }
+        }
+      }
+      if (!finished) throw new Error('flux interrompu avant la fin du routage')
+    } catch (e) {
+      const aborted = e instanceof DOMException && e.name === 'AbortError'
+      get().log('system', aborted ? 'warn' : 'error',
+        aborted
+          ? '[DEEPPCB] Flux de routage live interrompu par l’utilisateur.'
+          : `[DEEPPCB] Échec du flux live : ${e instanceof Error ? e.message : 'erreur inconnue'}`)
+    } finally {
+      liveAbort = null
+      get().endLiveRouting()
+    }
+  },
+
   reset: () => {
     cancelFlag = false
-    set({ stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null, running: false, cancelled: false })
+    liveAbort?.abort()
+    liveAbort = null
+    set({ stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null, running: false, cancelled: false, liveRouting: idleLive(), liveRoutes: [] })
   },
 
   cancel: () => {
@@ -181,12 +355,13 @@ export const useStudio = create<StudioState>((set, get) => ({
   },
 
   run: async () => {
-    if (get().running) return
+    if (get().running || get().liveRouting.active) return
     cancelFlag = false
     const nl = get().netlist
     set({
       running: true, cancelled: false,
       stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null,
+      liveRouting: idleLive(), liveRoutes: [],
     })
     const t0 = Date.now()
     get().log('system', 'info', `═══ DÉBUT DE CONCEPTION AUTONOME — ${nl.name} ═══`)
@@ -194,19 +369,27 @@ export const useStudio = create<StudioState>((set, get) => ({
     try {
       const result = await runPipeline(nl, {
         onLog: (stage, level, msg) => get().log(stage, level, msg),
-        onStage: (id, status, progress, detail, durationMs) =>
+        onStage: (id, status, progress, detail, durationMs) => {
+          if (id === 'routing' && status === 'running') get().beginLiveRouting('pipeline')
           set((s) => ({
             stages: { ...s.stages, [id]: { ...s.stages[id], status, progress, detail, durationMs } },
-          })),
+          }))
+        },
         onPlan: (p) => set({ plan: p }),
         onPlacements: (p) => set({ livePlacements: [...p] }),
         onCostHistory: (h) => { if (h.length) set({ costHistory: h }) },
         shouldCancel: () => cancelFlag,
+        onRoutingTrace: (ev) => get().pushLiveTrace(ev),
+        onRoutingPhase: (phase) => get().setLivePhase(phase),
+        onRoutingProgress: (p) => {
+          get().setLiveProgress(p)
+          if (!p.ok) get().dropLiveNet(p.net)
+        },
       })
 
       const routeRate = result.routing.routedNets / Math.max(1, result.routing.totalNets)
       const status = result.drc.errors === 0 && routeRate >= 0.98 ? 'success' : routeRate > 0.8 ? 'partial' : 'error'
-      set({ result, running: false })
+      set({ result, running: false, liveRouting: idleLive(), liveRoutes: [] })
       get().log('system', status === 'success' ? 'success' : 'warn',
         `═══ CONCEPTION TERMINÉE en ${((Date.now() - t0) / 1000).toFixed(1)} s — DFM ${result.dfm.score}/100, ${result.drc.errors} erreur(s) DRC ═══`)
 
@@ -235,7 +418,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Erreur inconnue'
       const cancelled = msg === 'ANNULÉ'
-      set({ running: false, cancelled })
+      set({ running: false, cancelled, liveRouting: idleLive(), liveRoutes: [] })
       get().log('system', cancelled ? 'warn' : 'error', cancelled ? '═══ PIPELINE ANNULÉ PAR L’UTILISATEUR ═══' : `═══ ÉCHEC DU PIPELINE : ${msg} ═══`)
       if (!cancelled) {
         set((s) => {

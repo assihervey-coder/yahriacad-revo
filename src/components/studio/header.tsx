@@ -4,7 +4,7 @@
  * [Circuitron nl_to_skidl], contrôle du pipeline
  */
 import { useState } from 'react'
-import { Cpu, Loader2, Play, Sparkles, Square } from 'lucide-react'
+import { Cpu, Loader2, Play, Radio, Sparkles, Square } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 import { NETLISTS } from '@/lib/engine/netlists'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -28,6 +28,9 @@ export function StudioHeader() {
   const customNetlists = useStudio((s) => s.customNetlists)
   const run = useStudio((s) => s.run)
   const cancel = useStudio((s) => s.cancel)
+  const startLiveRouting = useStudio((s) => s.startLiveRouting)
+  const liveRouting = useStudio((s) => s.liveRouting)
+  const hasPlacement = useStudio((s) => !!(s.livePlacements ?? s.result.placement))
   const setProject = useStudio((s) => s.setProject)
   const addCustomNetlist = useStudio((s) => s.addCustomNetlist)
   const log = useStudio((s) => s.log)
@@ -109,6 +112,17 @@ export function StudioHeader() {
         <Sparkles className="h-3.5 w-3.5" /> Générer par IA
       </Button>
 
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={running || liveRouting.active || !hasPlacement}
+        className="h-8 gap-1.5 border-sky-800/60 bg-sky-950/30 px-2.5 text-[11px] text-sky-300 hover:bg-sky-900/40 hover:text-sky-200 disabled:opacity-40"
+        onClick={() => void startLiveRouting()}
+        title="Routage live façon DeepPCB — le routeur serveur diffuse chaque piste en temps réel (placement existant réutilisé)"
+      >
+        <Radio className="h-3.5 w-3.5" /> Routage live
+      </Button>
+
       <div className="hidden text-[11px] text-neutral-500 md:block">{nl.board.w}×{nl.board.h} mm · 2 couches · FR4</div>
 
       <div className="ml-auto flex items-center gap-2.5">
@@ -126,6 +140,11 @@ export function StudioHeader() {
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pipeline en cours…
           </span>
         )}
+        {!running && liveRouting.active && (
+          <span className="flex items-center gap-1.5 text-[11px] text-sky-400">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Routage live…
+          </span>
+        )}
         {cancelled && running && (
           <span className="text-[11px] text-amber-400">Arrêt en cours…</span>
         )}
@@ -136,7 +155,8 @@ export function StudioHeader() {
         ) : (
           <Button
             size="sm"
-            className="h-8 gap-1.5 bg-emerald-600 text-xs text-white hover:bg-emerald-500"
+            disabled={liveRouting.active}
+            className="h-8 gap-1.5 bg-emerald-600 text-xs text-white hover:bg-emerald-500 disabled:opacity-40"
             onClick={run}
           >
             <Play className="h-3.5 w-3.5" /> Lancer la conception

@@ -49,6 +49,10 @@ export default function BoardViewer2D() {
   const result = useStudio((s) => s.result)
   const viewer = useStudio((s) => s.viewer)
   const setViewer = useStudio((s) => s.setViewer)
+  const liveRoutes = useStudio((s) => s.liveRoutes)
+  const liveActive = useStudio((s) => s.liveRouting.active)
+  const liveCurrentNet = useStudio((s) => s.liveRouting.currentNet)
+  const liveLastPoint = useStudio((s) => s.liveRouting.lastPoint)
 
   /* ------------------------- Rendu complet ------------------------- */
   const draw = useCallback(() => {
@@ -147,13 +151,20 @@ export default function BoardViewer2D() {
       }
     }
 
-    // Pistes + vias
-    if (viewer.showTraces && routing?.routes?.length) {
+    // Pistes + vias — pendant un flux live [DeepPCB], on dessine les traces
+    // reçues du routeur AU FIL DE L'EAU (le net en cours porte une lueur).
+    if (viewer.showTraces) {
+      const routes = liveActive ? liveRoutes : (routing?.routes ?? [])
       const netCls = new Map(netlist.nets.map((n) => [n.name, n.cls]))
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
-      for (const r of routing.routes) {
+      for (const r of routes) {
         const color = CLASS_COLOR[netCls.get(r.net) ?? 'signal'] ?? '#2dd4a0'
+        const isCurrent = liveActive && r.net === liveCurrentNet
+        if (isCurrent) {
+          ctx.shadowColor = color
+          ctx.shadowBlur = 9
+        }
         for (const seg of r.segments) {
           if (seg.pts.length < 2) continue
           ctx.strokeStyle = color
@@ -164,6 +175,7 @@ export default function BoardViewer2D() {
           for (let i = 1; i < seg.pts.length; i++) ctx.lineTo(X(seg.pts[i].x), Y(seg.pts[i].y))
           ctx.stroke()
         }
+        ctx.shadowBlur = 0
         ctx.globalAlpha = 1
         ctx.fillStyle = '#d4af37'
         for (const v of r.vias) {
@@ -171,6 +183,16 @@ export default function BoardViewer2D() {
           ctx.arc(X(v.x), Y(v.y), Math.max(1.2, (v.diameter / 2) * s), 0, Math.PI * 2)
           ctx.fill()
         }
+      }
+      // Tête du routeur : dernier point posé, halo bleu ciel
+      if (liveActive && liveLastPoint) {
+        ctx.shadowColor = '#38bdf8'
+        ctx.shadowBlur = 14
+        ctx.fillStyle = '#7dd3fc'
+        ctx.beginPath()
+        ctx.arc(X(liveLastPoint.x), Y(liveLastPoint.y), 3, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.shadowBlur = 0
       }
     }
 
@@ -220,7 +242,7 @@ export default function BoardViewer2D() {
         }
       }
     }
-  }, [netlist, placements, result, viewer])
+  }, [netlist, placements, result, viewer, liveRoutes, liveActive, liveCurrentNet, liveLastPoint])
 
   /* Redessin à chaque changement d'état */
   useEffect(() => { draw() }, [draw])

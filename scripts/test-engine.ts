@@ -61,7 +61,7 @@ for (const nl of NETLISTS) {
   assert(thermal.maxT > thermal.minT, `thermique : max ${thermal.maxT.toFixed(1)}°C / amb ${thermal.minT.toFixed(1)}°C`)
 
   const t1 = Date.now()
-  const routing = routeAll(nl, ratchet.placements, DEFAULT_RULES, constraints)
+  const routing = await routeAll(nl, ratchet.placements, DEFAULT_RULES, constraints)
   const rate = routing.routedNets / routing.totalNets
   assert(rate >= 0.75, `routage ${routing.routedNets}/${routing.totalNets} (${(rate * 100).toFixed(0)}%) en ${Date.now() - t1} ms — ${routing.viaCount} vias${routing.viasRemoved ? ` (−${routing.viasRemoved} via [DeepPCB])` : ''}, ${routing.totalLengthMm.toFixed(0)} mm`)
   assert(routing.viasRemoved !== undefined, `via_minimizer DeepPCB exécuté : ${routing.viasRemoved ?? 0} via(s) éliminé(s)`)

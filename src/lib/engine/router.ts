@@ -55,19 +55,36 @@ class MinHeap {
   }
 }
 
+/** [DeepPCB live_routing] événement de flux temps réel : une piste ou un via
+ *  vient d'être posé par le routeur — diffusé tel quel au navigateur. */
+export type TraceEvent =
+  | { type: 'segment'; net: string; segment: TraceSegment }
+  | { type: 'via'; net: string; via: Via }
+
+export type RouterPhase = 'greedy' | 'ripup' | 'via-min' | 'pour'
+
 export interface RouterOptions {
   onProgress?: (p: { done: number; total: number; net: string; ok: boolean }) => void
   shouldCancel?: () => boolean
+  /** Flux temps réel : émis pour chaque segment/via fraîchement posé (passe glouton) */
+  onTrace?: (ev: TraceEvent) => void
+  /** Transition de phase du moteur (glouton → rip-up → minimisation vias → plan de masse) */
+  onPhase?: (phase: RouterPhase) => void
+  /** Rythme du flux : pause (ms) après chaque émission de traces d'une branche.
+   *  0 = rendu plein régime (le navigateur peint quand même entre les branches). */
+  pacingMs?: number
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const CLASS_ORDER: Record<string, number> = {
   rf: 2, highspeed: 3, diffpair: 4, power: 1, ground: 0, analog: 5, signal: 6,
 }
 
-export function routeAll(
+export async function routeAll(
   nl: Netlist, placements: PlacedComponent[], rules: DesignRules,
   constraints: Constraint[], opts: RouterOptions = {},
-): RoutingSolution {
+): Promise<RoutingSolution> {
   const t0 = Date.now()
   const cols = Math.ceil(nl.board.w / RES)
   const rows = Math.ceil(nl.board.h / RES)
@@ -331,6 +348,9 @@ export function routeAll(
   const failedNets = new Set<number>()
   const triedRip = new Map<number, Set<number>>()
   let done = 0
+  /** [DeepPCB live] émission des traces activée pendant la passe glouton uniquement —
+   *  les re-routages internes (rip-up, via-min) ne polluent pas le flux. */
+  let emitLive = false
 
   /** Reconstruit les masques d'occupation depuis l'état des nets routés */
   function rebuildMasks() {
@@ -341,8 +361,10 @@ export function routeAll(
     for (const [ni2, st] of routedStore) markPath(st.tree, ni2, st.vias)
   }
 
-  /** Tente de router entièrement un net (croissance d'arbre, broches les plus proches d'abord) */
-  function attemptRoute(ni: number): { ok: boolean; blockedAt?: number } {
+  /** Tente de router entièrement un net (croissance d'arbre, broches les plus proches d'abord).
+   *  Asynchrone et coopérative : à chaque branche posée, les traces fraîches sont émises
+   *  au flux live puis une pause laisse le transport (SSE) ou le navigateur respirer. */
+  async function attemptRoute(ni: number): Promise<{ ok: boolean; blockedAt?: number }> {
     const net = nl.nets[ni]
     const pinCells = netPinsCells.get(ni)!
     const w = widthOfNet(ni)
@@ -370,6 +392,8 @@ export function routeAll(
     const bx = (v: number) => ({ x: (v % cols) * RES + RES / 2, y: Math.floor((v % cells) / cols) * RES + RES / 2 })
 
     while (remaining.length > 0) {
+      /** [DeepPCB live] traces de la branche courante, émises en bloc à la fin */
+      const pending: TraceEvent[] = []
       const pick = nearestFirst()
       const target = remaining.splice(pick, 1)[0]
       // masse & puissance : tentative relâchée d'emblée (elles ont le droit de passer
@@ -420,7 +444,9 @@ export function routeAll(
           for (let i = 1; i < simplified.length; i++)
             len += Math.abs(simplified[i].x - simplified[i - 1].x) + Math.abs(simplified[i].y - simplified[i - 1].y)
           netLen += len
-          allSegments.push({ net: net.name, layer: endLayer, pts: simplified, width: w })
+          const seg: TraceSegment = { net: net.name, layer: endLayer, pts: simplified, width: w }
+          allSegments.push(seg)
+          pending.push({ type: 'segment', net: net.name, segment: seg })
         }
       }
       for (let i = 1; i < path.length; i++) {
@@ -431,7 +457,9 @@ export function routeAll(
           pts.push(bx(prev))
           flush(layerPrev)
           const pos = bx(prev)
-          allVias.push({ net: net.name, x: Math.round(pos.x * 100) / 100, y: Math.round(pos.y * 100) / 100, drill: rules.minDrill, diameter: rules.minDrill + 0.5 })
+          const via: Via = { net: net.name, x: Math.round(pos.x * 100) / 100, y: Math.round(pos.y * 100) / 100, drill: rules.minDrill, diameter: rules.minDrill + 0.5 }
+          allVias.push(via)
+          pending.push({ type: 'via', net: net.name, via })
           curLayer = layerCur
           pts = [bx(curr)]
         } else {
@@ -440,6 +468,12 @@ export function routeAll(
         }
       }
       flush(curLayer)
+
+      /* [DeepPCB live] émission des traces fraîches + respiration du transport */
+      if (pending.length > 0 && emitLive && opts.onTrace) {
+        for (const ev of pending) opts.onTrace(ev)
+        await sleep(opts.pacingMs && opts.pacingMs > 0 ? opts.pacingMs : 0)
+      }
     }
 
     const seenVia = new Set<string>()
@@ -471,7 +505,9 @@ export function routeAll(
     return best
   }
 
-  /* ---- Passe 1 : routage glouton par criticité ---- */
+  /* ---- Passe 1 : routage glouton par criticité (flux live activé) ---- */
+  opts.onPhase?.('greedy')
+  emitLive = true
   for (const net of ordered) {
     if (opts.shouldCancel?.()) break
     const ni = netIndex.get(net.name)!
@@ -481,19 +517,21 @@ export function routeAll(
       opts.onProgress?.({ done, total: ordered.length, net: net.name, ok: true })
       continue
     }
-    const r = attemptRoute(ni)
+    const r = await attemptRoute(ni)
     if (!r.ok) failedNets.add(ni)
     done++
     opts.onProgress?.({ done, total: ordered.length, net: net.name, ok: r.ok })
   }
+  emitLive = false
 
   /* ---- Passe 2 : RIP-UP & REROUTE (jusqu'à 8 rounds, rip multi-bloquants) ---- */
+  opts.onPhase?.('ripup')
   for (let round = 0; round < 8 && failedNets.size > 0; round++) {
     if (opts.shouldCancel?.()) break
     let progress = false
     for (const fi of [...failedNets]) {
       if (opts.shouldCancel?.()) break
-      const probe = attemptRoute(fi)
+      const probe = await attemptRoute(fi)
       const blockedAt = probe.blockedAt
       if (blockedAt === undefined) { failedNets.delete(fi); triedRip.delete(fi); progress = true; continue }
       const blocker = findBlocker(fi, blockedAt)
@@ -502,12 +540,12 @@ export function routeAll(
       const blockerNet = nl.nets[blocker].name
       routedStore.delete(blocker)
       rebuildMasks()
-      const rF = attemptRoute(fi)
+      const rF = await attemptRoute(fi)
       if (rF.ok) {
         failedNets.delete(fi)
         triedRip.delete(fi)
         opts.onProgress?.({ done, total: ordered.length, net: `${nl.nets[fi].name} (rip-up de ${blockerNet})`, ok: true })
-        const rB = attemptRoute(blocker)
+        const rB = await attemptRoute(blocker)
         if (!rB.ok) failedNets.add(blocker)
         progress = true
       } else {
@@ -530,6 +568,7 @@ export function routeAll(
    * cher qu'un détour (fiabilité, insertion, fabrication). */
   let viasRemoved = 0
   {
+    opts.onPhase?.('via-min')
     viaCost = 46
     const candidates = [...routedStore.keys()].filter((ni) => routedStore.get(ni)!.vias.length > 0)
     for (const ni of candidates) {
@@ -537,7 +576,7 @@ export function routeAll(
       const before = routedStore.get(ni)!
       routedStore.delete(ni)
       rebuildMasks()
-      const r = attemptRoute(ni)
+      const r = await attemptRoute(ni)
       const after = routedStore.get(ni)
       if (r.ok && after && after.vias.length < before.vias.length && after.lengthMm <= before.lengthMm * 1.3 + 2) {
         viasRemoved += before.vias.length - after.vias.length
@@ -556,6 +595,7 @@ export function routeAll(
    * sur la couche inférieure : toutes les cellules libres, inondées depuis
    * les pads de masse, forment un plan continu (pratique industrielle 2 couches). */
   let groundPour: RoutingSolution['groundPour'] | undefined
+  opts.onPhase?.('pour')
   for (const fi of [...failedNets]) {
     if (nl.nets[fi].cls !== 'ground') continue
     const pins = netPinsCells.get(fi)!

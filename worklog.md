@@ -86,3 +86,22 @@ Stage Summary:
 - Tous les tests passent, TypeScript propre, MCP testé en live.
 
 
+
+---
+Task ID: 4
+Agent: Super Z (agent principal)
+Task: Implémenter le routage live « trait par trait » façon DeepPCB — flux temps réel du routeur vers le navigateur — puis commit + push.
+
+Work Log:
+- `router.ts` : routeAll converti en asynchrone coopératif — nouveaux callbacks onTrace (chaque segment/via fraîchement posé, passe glouton uniquement via flag emitLive), onPhase (greedy → ripup → via-min → pour) et pacingMs (rythme du flux, respiration du transport entre chaque branche d'arbre).
+- `orchestrator.ts` : les 3 callbacks de routage live sont exposés dans PipelineCallbacks (onRoutingTrace/onRoutingPhase/onRoutingProgress) et branchés sur routeAll.
+- `api/routing/live/route.ts` (nouveau) : endpoint SSE POST — le routeur tourne CÔTÉ SERVEUR et diffuse chaque piste au fil de sa pose (hello → phase → segment/via → progress → complete/error). Choix documenté : SSE = équivalent WebSocket pour un flux de progression, traverse les proxys sans upgrade ni port dédié ; annulation propre via req.signal → shouldCancel.
+- `studio-store.ts` : état liveRouting (phase, progression, net courant, traces reçues, tête du routeur) + liveRoutes (accumulation net par net) ; consommateur SSE startLiveRouting (AbortController, parseur de frames, drop des traces fantômes des nets en échec) ; finalisation complète à l'événement complete (SI + thermique + DRC/DFM + Gerber + firmware → result) ; le pipeline local diffuse AUSSI ses traces pendant l'étape de routage (source 'pipeline').
+- UI : bouton « Routage live » (header, actif dès qu'un placement existe), HUD overlay (phase, barre de progression, net courant, compteur de traces, interrompre), viewers 2D Canvas ET 3D Three.js — pistes dessinées au fil de l'eau, lueur sur le net en cours, halo bleu ciel sur la tête du routeur.
+- Corrections passées au fil du test : normalisation {type} → {t} des événements de trace dans la route SSE (détecté par le smoke test : 0 segment reçu) ; conversion d'événements SSE → TraceEvent dans le store (tsc) ; await sur routeAll dans surgicalMove et scripts/test-engine.ts.
+- Vérifications : tsc src/ propre ; test-engine TOUS LES TESTS PASSENT ; smoke test SSE scripts/test-live-sse.ts (77 segments + 76 vias étalés sur ~2,5 s, 4 phases, complete) ; E2E navigateur (pipeline 14,9 s → routage live 4 s → « 26/28 nets · 85 vias (−10) · DFM 87/100 — analyse + export régénérés »), HUD capturé pendant le flux, zéro erreur console.
+
+Stage Summary:
+- Le routage n'est plus une boîte noire : il se REGARDE — le routeur serveur diffuse chaque piste/via en temps réel (SSE), le HUD raconte la phase du moteur, les viewers 2D/3D dessinent trait par trait avec lueur sur le net en cours.
+- Le flux serveur produit un résultat canonique complet (via-minimizer + plan de masse inclus) finalisé en analyse + export, sans relancer le pipeline.
+- Le pipeline local bénéficie du même affichage live pendant son étape de routage.

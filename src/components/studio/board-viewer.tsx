@@ -13,6 +13,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useStudio } from '@/lib/studio-store'
 import { extractConstraints } from '@/lib/engine/parser'
 import BoardViewer2D from './board-viewer-2d'
+import { LiveRoutingHud } from './live-hud'
 import type { PlacedComponent, Route, ThermalMap } from '@/lib/engine/types'
 
 /** Détection WebGL sans exception — évite le crash « THREE.WebGLRenderer »
@@ -88,6 +89,10 @@ export default function BoardViewer() {
   const surgicalMove = useStudio((s) => s.surgicalMove)
   const surgicalBusy = useStudio((s) => s.surgicalBusy)
   const pipelineRunning = useStudio((s) => s.running)
+  const liveRoutes = useStudio((s) => s.liveRoutes)
+  const liveActive = useStudio((s) => s.liveRouting.active)
+  const liveCurrentNet = useStudio((s) => s.liveRouting.currentNet)
+  const liveLastPoint = useStudio((s) => s.liveRouting.lastPoint)
 
   /** null = test en cours · true = WebGL OK · false = repli 2D logiciel */
   const [webglOk, setWebglOk] = useState<boolean | null>(null)
@@ -316,19 +321,26 @@ export default function BoardViewer() {
     eng.compGroup.visible = viewer.showComponents
   }, [placements, netlist, viewer.selectedRef, viewer.showComponents])
 
-  /* ---------------- Pistes + vias ---------------- */
+  /* ---------------- Pistes + vias ----------------
+   * Pendant un flux live [DeepPCB] : les traces reçues du routeur sont
+   * ajoutées AU FIL DE L'EAU ; le net en cours porte une lueur claire. */
   useEffect(() => {
     const eng = engineRef.current
     if (!eng) return
     const { boardW: W, boardH: H } = eng
     eng.traceGroup.clear()
-    const routes: Route[] = result.routing?.routes ?? []
+    const routes: Route[] = liveActive ? liveRoutes : (result.routing?.routes ?? [])
     if (!routes.length) return
     const netCls = new Map(netlist.nets.map((n) => [n.name, n.cls]))
 
     for (const r of routes) {
       const color = CLASS_COLOR[netCls.get(r.net) ?? 'signal'] ?? 0x2dd4a0
-      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.92 })
+      const isCurrent = liveActive && r.net === liveCurrentNet
+      const mat = new THREE.MeshBasicMaterial({
+        color: isCurrent ? new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.45) : color,
+        transparent: true,
+        opacity: isCurrent ? 1 : 0.92,
+      })
       for (const seg of r.segments) {
         for (let i = 1; i < seg.pts.length; i++) {
           const ax = seg.pts[i - 1].x - W / 2, az = seg.pts[i - 1].y - H / 2
@@ -351,8 +363,17 @@ export default function BoardViewer() {
         eng.traceGroup.add(m)
       }
     }
+    // Tête du routeur : halo bleu ciel au dernier point posé
+    if (liveActive && liveLastPoint) {
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.7, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.95 }),
+      )
+      head.position.set(liveLastPoint.x - W / 2, 0.9, liveLastPoint.y - H / 2)
+      eng.traceGroup.add(head)
+    }
     eng.traceGroup.visible = viewer.showTraces
-  }, [result.routing, netlist, viewer.showTraces])
+  }, [result.routing, liveRoutes, liveActive, liveCurrentNet, liveLastPoint, netlist, viewer.showTraces])
 
   /* ---------------- Heatmap thermique ---------------- */
   useEffect(() => {
@@ -486,6 +507,9 @@ export default function BoardViewer() {
       ) : (
         <div ref={mountRef} className="h-full w-full" data-testid="board-viewer" />
       )}
+
+      {/* HUD du routage live [DeepPCB] — superposé pendant un flux temps réel */}
+      <LiveRoutingHud />
 
       {/* Barre d'outils superposée */}
       <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap items-center gap-1.5">

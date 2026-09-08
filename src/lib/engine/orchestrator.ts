@@ -13,6 +13,7 @@
 import type {
   AgentPlan, Constraint, DesignResult, Netlist, PlacedComponent, StageId,
 } from './types'
+import type { RouterPhase, TraceEvent } from './router'
 import { DEFAULT_RULES } from './rules'
 import { extractConstraints, parseNetlist } from './parser'
 import { requestPlan, ruleBasedPlan } from './llm-agent'
@@ -33,6 +34,12 @@ export interface PipelineCallbacks {
   onPlacements: (p: PlacedComponent[]) => void
   onCostHistory: (h: number[]) => void
   shouldCancel: () => boolean
+  /** [DeepPCB live] piste/via posée en direct par le routeur (flux temps réel) */
+  onRoutingTrace?: (ev: TraceEvent) => void
+  /** [DeepPCB live] phase du moteur de routage (glouton, rip-up, via-min, plan de masse) */
+  onRoutingPhase?: (phase: RouterPhase) => void
+  /** [DeepPCB live] progression net par net (ok=false → le client retire les traces fantômes) */
+  onRoutingProgress?: (p: { done: number; total: number; net: string; ok: boolean }) => void
 }
 
 export interface PipelineOptions {
@@ -160,12 +167,15 @@ export async function runPipeline(
   if (cb.shouldCancel()) throw cancelErr()
   cb.onStage('routing', 'running', 0, 'Routeur maze A* multicouche…')
   await yieldToUi()
-  const routing = routeAll(nl, finalPlacements, rules, constraints, {
+  const routing = await routeAll(nl, finalPlacements, rules, constraints, {
     onProgress: ({ done, total, net, ok }) => {
       cb.onStage('routing', 'running', done / total, `Net ${done}/${total} : ${net}${ok ? '' : ' ✗'}`)
       if (done % 5 === 0 || done === total) cb.onLog('routing', ok ? 'info' : 'warn', `${ok ? 'Routé' : 'ÉCHEC'} : ${net} (${done}/${total})`)
+      cb.onRoutingProgress?.({ done, total, net, ok })
     },
     shouldCancel: cb.shouldCancel,
+    onTrace: cb.onRoutingTrace,
+    onPhase: cb.onRoutingPhase,
   })
   if (cb.shouldCancel()) throw cancelErr()
   cb.onLog('routing', routing.routedNets === routing.totalNets ? 'success' : 'warn',
