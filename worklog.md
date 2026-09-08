@@ -43,3 +43,21 @@ Stage Summary:
 - L'agent LLM est réellement dans la boucle (son plan alimente l'attraction de zones du World Model).
 - Différenciateurs matérialisés : World Model latent (prédiction µs), rip-up & reroute, plan de masse synthétique, légalisation, DRC/DFM honnête, Gerber RS-274X + Excellon + BOM/POS téléchargeables.
 - Fichiers clés : `src/lib/engine/*` (moteur), `src/app/api/*` (LLM + persistance), `src/components/studio/*` (UI), `scripts/test-engine.ts` (régression).
+
+---
+Task ID: 2
+Agent: Super Z (agent principal)
+Task: Corriger le crash WebGL du viewer (« THREE.WebGLRenderer: A WebGL context could not be created » — sandbox avec AllowWebgl2:false) puis committer et pousser tout le projet sur github.com/assihervey-coder/yahriacad-revo.git.
+
+Work Log:
+- Diagnostic : `new THREE.WebGLRenderer()` levait une exception dans les environnements où WebGL/WebGL2 est désactivé (preview sandboxée, VM, GPU bloqué) — aucune détection préalable dans `board-viewer.tsx`.
+- Création de `src/components/studio/board-viewer-2d.tsx` : viewer de secours 100 % Canvas 2D (zéro WebGL) rendant la même information — substrat, pistes colorées par classe (couche bottom atténuée), vias dorés, plan de masse bicouche (texture offscreen 1 px/cellule), heatmap thermique (palette inferno, ImageData), keepout RF hachuré, composants orientés avec étiquettes, sélection au clic (hit-test avec swap 90°/270°), redessin sur ResizeObserver.
+- Patch `board-viewer.tsx` : helper `isWebGLAvailable()` (test de contexte webgl2/webgl sans exception), état `webglOk` (null/true/false), garde en tête de l'effet d'init + try/catch autour du constructeur WebGLRenderer, rendu conditionnel `<BoardViewer2D />` en repli, masquage du switch 3D/2D en mode secours, badge ambre « WebGL indisponible — rendu 2D logiciel actif ».
+- Correction au passage d'une erreur TypeScript préexistante dans `src/app/api/agent/plan/route.ts` (`c.power` possiblement undefined → `(c.power ?? 0)`).
+- Vérification : `tsc --noEmit` → zéro erreur dans `src/` ; serveur dev → `GET / 200`, compilation propre.
+- Commit + push vers `assihervey-coder/yahriacad-revo` (main).
+
+Stage Summary:
+- Le viewer ne peut plus crasher : détection WebGL explicite + repli Canvas 2D fonctionnellement équivalent (même interactions, mêmes calques visuels).
+- Code source `src/` strictement propre côté TypeScript ; projet poussé sur GitHub.
+

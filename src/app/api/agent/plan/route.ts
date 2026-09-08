@@ -57,7 +57,7 @@ Réponds UNIQUEMENT avec un JSON valide, sans texte autour, au format :
     const context = `PROJET : ${project.name ?? 'carte'} — carte ${project.boardW ?? 60}×${project.boardH ?? 45} mm, 2 couches.
 
 COMPOSANTS (${comps.length}) :
-${comps.map((c) => `- ${c.ref} : ${c.value} [${c.category}]${c.parent ? ` parent=${c.parent}` : ''}${c.power > 0.2 ? ` ⚠ dissipation ${(c.power * 1000).toFixed(0)}mW` : ''}${c.note ? ` — ${c.note}` : ''}`).join('\n')}
+${comps.map((c) => `- ${c.ref} : ${c.value} [${c.category}]${c.parent ? ` parent=${c.parent}` : ''}${(c.power ?? 0) > 0.2 ? ` ⚠ dissipation ${((c.power ?? 0) * 1000).toFixed(0)}mW` : ''}${c.note ? ` — ${c.note}` : ''}`).join('\n')}
 
 NETS CRITIQUES :
 ${nets.filter((n) => n.cls && !['signal', 'ground'].includes(n.cls)).map((n) => `- ${n.name} [${n.cls}] (${n.pinCount} broches)`).join('\n')}

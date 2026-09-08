@@ -7,12 +7,27 @@
  * pistes cuivre colorées par classe de net, vias dorés, heatmap thermique,
  * keepout RF. Sélection au clic + caméra orbitale + mode 2D (vue dessus).
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useStudio } from '@/lib/studio-store'
 import { extractConstraints } from '@/lib/engine/parser'
+import BoardViewer2D from './board-viewer-2d'
 import type { PlacedComponent, Route, ThermalMap } from '@/lib/engine/types'
+
+/** Détection WebGL sans exception — évite le crash « THREE.WebGLRenderer »
+ *  sur les systèmes restreints (AllowWebgl2:false, VM, GPU bloqué). */
+function isWebGLAvailable(): boolean {
+  try {
+    const canvas = document.createElement('canvas')
+    return !!(
+      window.WebGLRenderingContext &&
+      (canvas.getContext('webgl2') || canvas.getContext('webgl'))
+    )
+  } catch {
+    return false
+  }
+}
 
 const CATEGORY_COLOR: Record<string, number> = {
   mcu: 0x101314, memory: 0x1a1d1f, interface: 0x1a1d1f,
@@ -71,16 +86,31 @@ export default function BoardViewer() {
   const viewer = useStudio((s) => s.viewer)
   const setViewer = useStudio((s) => s.setViewer)
 
+  /** null = test en cours · true = WebGL OK · false = repli 2D logiciel */
+  const [webglOk, setWebglOk] = useState<boolean | null>(null)
+
   /* ---------------- Initialisation de la scène ---------------- */
   useEffect(() => {
     const mount = mountRef.current
     if (!mount) return
+    if (!isWebGLAvailable()) {
+      setWebglOk(false)
+      return
+    }
+    setWebglOk(true)
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x05080a)
     scene.fog = new THREE.Fog(0x05080a, 120, 260)
 
     const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 500)
-    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    let renderer: THREE.WebGLRenderer
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true })
+    } catch {
+      // GPU réellement indisponible malgré le test de contexte — repli 2D
+      setWebglOk(false)
+      return
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.shadowMap.enabled = false
     mount.appendChild(renderer.domElement)
@@ -448,23 +478,29 @@ export default function BoardViewer() {
 
   return (
     <div className="relative h-full w-full overflow-hidden rounded-xl border border-emerald-900/40 bg-[#05080a]">
-      <div ref={mountRef} className="h-full w-full" data-testid="board-viewer" />
+      {webglOk === false ? (
+        <BoardViewer2D />
+      ) : (
+        <div ref={mountRef} className="h-full w-full" data-testid="board-viewer" />
+      )}
 
       {/* Barre d'outils superposée */}
       <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap items-center gap-1.5">
-        <div className="pointer-events-auto flex overflow-hidden rounded-md border border-emerald-800/50 bg-black/60 backdrop-blur">
-          {(['3d', '2d'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setViewer({ mode: m })}
-              className={`px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide transition-colors ${
-                viewer.mode === m ? 'bg-emerald-600 text-white' : 'text-emerald-300/70 hover:bg-emerald-900/40'
-              }`}
-            >
-              {m === '3d' ? '3D' : '2D · dessus'}
-            </button>
-          ))}
-        </div>
+        {webglOk !== false && (
+          <div className="pointer-events-auto flex overflow-hidden rounded-md border border-emerald-800/50 bg-black/60 backdrop-blur">
+            {(['3d', '2d'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setViewer({ mode: m })}
+                className={`px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide transition-colors ${
+                  viewer.mode === m ? 'bg-emerald-600 text-white' : 'text-emerald-300/70 hover:bg-emerald-900/40'
+                }`}
+              >
+                {m === '3d' ? '3D' : '2D · dessus'}
+              </button>
+            ))}
+          </div>
+        )}
         {([
           ['showComponents', 'Composants'],
           ['showTraces', 'Pistes'],
@@ -503,6 +539,12 @@ export default function BoardViewer() {
           <button className="mt-1 text-[10px] text-neutral-500 hover:text-neutral-300" onClick={() => setViewer({ selectedRef: null })}>
             fermer
           </button>
+        </div>
+      )}
+
+      {webglOk === false && (
+        <div className="absolute bottom-3 right-3 rounded-md border border-amber-700/40 bg-black/70 px-2.5 py-1.5 text-[10px] text-amber-300/90 backdrop-blur">
+          WebGL indisponible sur cet appareil — rendu 2D logiciel actif
         </div>
       )}
     </div>
