@@ -1,0 +1,42 @@
+// NEXUS PCB — Schéma de persistance
+// Équivalent : PostgreSQL (métadonnées projets) + entrepôt des runs
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Projet de conception (une netlist + son historique)
+model Project {
+  id        String @id @default(cuid())
+  netlistId String // identifiant de netlist (nexus-core, nexus-iot, nexus-rf)
+  name      String
+  createdAt DateTime @default(now())
+  runs      Run[]
+}
+
+/// Exécution du pipeline de conception autonome
+model Run {
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status         String   // success | partial | error
+  planSource     String   // llm | rules
+  costHpwl       Float
+  costThermal    Float
+  costConstraint Float
+  routedNets     Int
+  totalNets      Int
+  viaCount       Int
+  totalLengthMm  Float
+  drcErrors      Int
+  drcWarnings    Int
+  dfmScore       Int
+  maxTempC       Float
+  durationMs     Int
+  createdAt      DateTime @default(now())
+}
