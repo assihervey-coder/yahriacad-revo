@@ -18,8 +18,18 @@ const PHASE_LABEL: Record<string, string> = {
   idle: '',
 }
 
+const SPEEDS = [0.5, 1, 2, 4] as const
+const SPEED_TITLE: Record<number, string> = {
+  0.5: 'Ralenti — admire chaque piste se poser',
+  1: 'Vitesse normale (tempo DeepPCB)',
+  2: 'Accéléré ×2',
+  4: 'Turbo ×4 — timelapse',
+}
+
 export function LiveRoutingHud() {
   const live = useStudio((s) => s.liveRouting)
+  const liveSpeed = useStudio((s) => s.liveSpeed)
+  const setLiveSpeed = useStudio((s) => s.setLiveSpeed)
   const stopLiveRouting = useStudio((s) => s.stopLiveRouting)
 
   if (!live.active) return null
@@ -41,7 +51,7 @@ export function LiveRoutingHud() {
           ROUTAGE LIVE <span className="text-[9px] font-medium text-sky-600">· {sourceLabel}</span>
         </div>
         <button
-          onClick={stopLiveRouting}
+          onClick={() => stopLiveRouting()}
           title="Interrompre le flux de routage"
           className="flex items-center gap-1 rounded border border-red-800/60 bg-red-950/40 px-1.5 py-0.5 text-[10px] text-red-300 transition-colors hover:bg-red-900/40"
         >
@@ -61,12 +71,40 @@ export function LiveRoutingHud() {
       <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px]">
         <span className="text-neutral-500">
           nets <span className="text-neutral-300">{live.netsDone}/{live.netsTotal || '…'}</span>
-          {' · '}{live.traces} traces reçues
+          {' · '}{live.traces} traces jouées
         </span>
         <span className="max-w-[45%] truncate font-mono text-sky-300" title={live.currentNet}>
           {live.currentNet}
         </span>
       </div>
+
+      {/* Vitesse du flux réglable en plein vol — la lecture est cadencée localement */}
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-sky-900/40 pt-2">
+        <span className="text-[9px] uppercase tracking-wider text-neutral-500">vitesse</span>
+        <div className="flex gap-0.5">
+          {SPEEDS.map((v) => (
+            <button
+              key={v}
+              onClick={() => setLiveSpeed(v)}
+              title={SPEED_TITLE[v]}
+              className={`rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
+                Math.abs(liveSpeed - v) < 0.01
+                  ? 'bg-sky-600/80 text-white'
+                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-sky-200'
+              }`}
+            >
+              ×{v}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {live.source === 'server' && (
+        <div className="mt-1.5 text-[9px] leading-snug text-neutral-500">
+          Nudge live : cliquez un composant puis utilisez les flèches —
+          le routeur repart <span className="text-sky-400">en direct</span> sur la nouvelle position.
+        </div>
+      )}
     </div>
   )
 }

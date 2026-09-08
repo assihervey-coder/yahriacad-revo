@@ -102,6 +102,8 @@ interface StudioState {
   history: RunHistoryItem[]
   liveRouting: LiveRoutingState
   liveRoutes: Route[]
+  /** Vitesse de lecture du flux live : 0.5 | 1 | 2 | 4 */
+  liveSpeed: number
   setProject: (id: string) => void
   addCustomNetlist: (nl: Netlist) => void
   surgicalMove: (ref: string, dx: number, dy: number) => Promise<void>
@@ -113,7 +115,10 @@ interface StudioState {
   loadHistory: () => Promise<void>
   /* Routage live [DeepPCB] */
   startLiveRouting: (pacingMs?: number) => Promise<void>
-  stopLiveRouting: () => void
+  stopLiveRouting: (reason?: 'user' | 'nudge') => void
+  setLiveSpeed: (v: number) => void
+  /** Nudge chirurgical PENDANT un flux live : coupe le flux, déplace, repart en direct */
+  liveNudge: (ref: string, dx: number, dy: number) => Promise<void>
   beginLiveRouting: (source: 'server' | 'pipeline') => void
   pushLiveTrace: (ev: TraceEvent) => void
   dropLiveNet: (net: string) => void
@@ -124,6 +129,99 @@ interface StudioState {
 
 let cancelFlag = false
 let liveAbort: AbortController | null = null
+
+/* --- Moteur de lecture du flux live [DeepPCB] --------------------------------
+ * Le réseau pousse les événements à son rythme filaire ; le DESSIN, lui, est
+ * cadencé localement : un événement joué toutes les BASE_TICK_MS / liveSpeed.
+ * La vitesse (×0.5 → ×4) se règle donc EN PLEIN VOL sans toucher au serveur,
+ * et la file garantit que traces / phases / progression restent cohérents. */
+const BASE_TICK_MS = 14 // tempo visuel à ×1 — le rythme DeepPCB d'origine
+
+type LiveQueued =
+  | { k: 'trace'; ev: TraceEvent }
+  | { k: 'progress'; p: { done: number; total: number; net: string; ok: boolean } }
+  | { k: 'phase'; phase: LivePhase }
+  | { k: 'hello'; total: number }
+  | { k: 'complete'; result: RoutingSolution }
+
+let liveQueue: LiveQueued[] = []
+let liveTimer: ReturnType<typeof setTimeout> | null = null
+let liveStreamDone = false
+let liveSawComplete = false
+let liveStopReason: 'user' | 'nudge' | null = null
+let liveT0 = 0
+
+/** Joue un événement de la file : trace visible, métadonnées HUD, ou finalisation. */
+function liveApplyQueued(q: LiveQueued) {
+  const st = useStudio.getState()
+  if (q.k === 'trace') { st.pushLiveTrace(q.ev); return }
+  if (q.k === 'progress') {
+    st.setLiveProgress(q.p)
+    if (!q.p.ok) st.dropLiveNet(q.p.net) // retire les traces fantômes d'un net en échec
+    return
+  }
+  if (q.k === 'phase') { st.setLivePhase(q.phase); return }
+  if (q.k === 'hello') { st.setLiveProgress({ done: 0, total: q.total, net: '—', ok: true }); return }
+  /* k === 'complete' — finalisation canonique : la solution intègre déjà le
+   * via-minimizer et le plan de masse ; on régénère SI + DRC/DFM + export. */
+  liveSawComplete = true
+  const routing = q.result
+  const nl = st.netlist
+  const placements = st.livePlacements ?? []
+  const constraints = extractConstraints(nl)
+  const routeMap = new Map(routing.routes.map((r) => [r.net, r]))
+  const si = analyzeSi(nl, routeMap, (cls) => DEFAULT_RULES.widths[cls as keyof typeof DEFAULT_RULES.widths] ?? 0.25, constraints)
+  const thermal = st.result.thermal ?? solveThermal(nl, placements)
+  const drc = runDrc(nl, placements, routing, thermal, DEFAULT_RULES, constraints)
+  const dfm = runDfm(nl, placements, routing, DEFAULT_RULES)
+  const gerber = generateGerber(nl, placements, routing)
+  gerber.files.push(...generateFirmwareBridge(nl).files)
+  useStudio.setState((s2) => ({ result: { ...s2.result, routing, si, thermal, drc, dfm, gerber } }))
+  useStudio.getState().log('system', 'success',
+    `[DEEPPCB] Routage live terminé en ${((Date.now() - liveT0) / 1000).toFixed(1)} s — ${routing.routedNets}/${routing.totalNets} nets · ${routing.viaCount} vias${routing.viasRemoved ? ` (−${routing.viasRemoved})` : ''} · DFM ${dfm.score}/100 — analyse + export régénérés`)
+}
+
+/** Cadence la lecture : 1 événement toutes les BASE_TICK_MS / liveSpeed. */
+function livePump() {
+  if (liveTimer || liveQueue.length === 0) return
+  const speed = useStudio.getState().liveSpeed || 1
+  liveTimer = setTimeout(() => {
+    liveTimer = null
+    const q = liveQueue.shift()
+    if (q && useStudio.getState().liveRouting.active) liveApplyQueued(q)
+    if (liveQueue.length > 0) livePump()
+    else if (liveStreamDone) liveFinish()
+  }, Math.max(4, BASE_TICK_MS / speed))
+}
+
+function liveEnqueue(q: LiveQueued) {
+  liveQueue.push(q)
+  livePump()
+}
+
+function liveFinish() {
+  if (liveTimer) { clearTimeout(liveTimer); liveTimer = null }
+  liveQueue = []
+  useStudio.getState().endLiveRouting()
+}
+
+function liveNoteStreamEnd() {
+  liveStreamDone = true
+  if (liveQueue.length === 0) liveFinish()
+}
+
+function liveFlush() {
+  if (liveTimer) { clearTimeout(liveTimer); liveTimer = null }
+  liveQueue = []
+}
+
+/** Attend (borné) que la lecture locale ait tout joué — utilisé par le pipeline. */
+async function liveDrained() {
+  const t0 = Date.now()
+  while ((liveQueue.length > 0 || liveTimer) && Date.now() - t0 < 20000) {
+    await new Promise((r) => setTimeout(r, 40))
+  }
+}
 
 export const useStudio = create<StudioState>((set, get) => ({
   netlistId: NETLISTS[0].id,
@@ -143,9 +241,11 @@ export const useStudio = create<StudioState>((set, get) => ({
   history: [],
   liveRouting: idleLive(),
   liveRoutes: [],
+  liveSpeed: 1,
 
   setProject: (id) => {
     const nl = get().customNetlists.find((x) => x.id === id) ?? getNetlist(id)
+    liveFlush()
     set({
       netlistId: id,
       netlist: nl,
@@ -255,11 +355,54 @@ export const useStudio = create<StudioState>((set, get) => ({
   endLiveRouting: () =>
     set({ liveRouting: idleLive(), liveRoutes: [] }),
 
-  stopLiveRouting: () => {
+  stopLiveRouting: (reason = 'user') => {
+    liveStopReason = reason
+    liveFlush()
     liveAbort?.abort()
   },
 
-  startLiveRouting: async (pacingMs = 14) => {
+  setLiveSpeed: (v) => {
+    const sp = Math.min(4, Math.max(0.25, Number.isFinite(v) ? v : 1))
+    set({ liveSpeed: sp })
+    // la nouvelle tempo s'applique dès le prochain événement joué
+    if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; livePump() }
+  },
+
+  /* ---------------- Nudge chirurgical PENDANT le live [Flux.ai × DeepPCB] ------
+   * On regarde le routeur poser ses pistes ; un passage ne nous plaît pas ? On
+   * sélectionne le composant fautif, on le pousse de 2 mm — le flux est coupé
+   * proprement et le routeur REPART EN DIRECT sur la nouvelle géométrie. */
+  liveNudge: async (ref, dx, dy) => {
+    const s = get()
+    if (s.running || s.surgicalBusy || !s.livePlacements) return
+    set({ surgicalBusy: true })
+    get().log('system', 'agent', `[NUDGE LIVE] ${ref} déplacé de (${dx > 0 ? '+' : ''}${dx}, ${dy > 0 ? '+' : ''}${dy}) mm — coupure du flux puis re-routage en direct…`)
+    if (s.liveRouting.active) get().stopLiveRouting('nudge')
+    // laisse le lecteur SSE s'arrêter (abort asynchrone → endLiveRouting)
+    const t0 = Date.now()
+    while (get().liveRouting.active && Date.now() - t0 < 2000) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    // déplacement borné dans la carte (même règle que la chirurgie classique)
+    const nl = get().netlist
+    const clamped = get().livePlacements!.map((p) => {
+      if (p.ref !== ref) return p
+      const c = nl.components.find((x) => x.ref === ref)
+      if (!c) return p
+      const swap = p.rot === 90 || p.rot === 270
+      const w = swap ? c.footprint.h : c.footprint.w
+      const h = swap ? c.footprint.w : c.footprint.h
+      return {
+        ...p,
+        x: Math.min(nl.board.w - w / 2 - 0.4, Math.max(w / 2 + 0.4, p.x + dx)),
+        y: Math.min(nl.board.h - h / 2 - 0.4, Math.max(h / 2 + 0.4, p.y + dy)),
+      }
+    })
+    set({ livePlacements: clamped, surgicalBusy: false })
+    void get().startLiveRouting() // le routeur repart EN DIRECT, trait par trait
+  },
+
+  startLiveRouting: async (pacingMs = 3) => {
     const s = get()
     if (s.running || s.liveRouting.active) return
     const placements = s.livePlacements ?? s.result.placement?.placements
@@ -269,10 +412,16 @@ export const useStudio = create<StudioState>((set, get) => ({
     }
     const nl = s.netlist
     liveAbort = new AbortController()
+    liveFlush()
+    liveStreamDone = false
+    liveSawComplete = false
+    liveT0 = Date.now()
     get().beginLiveRouting('server')
     get().log('system', 'agent', '[DEEPPCB] Flux de routage live ouvert — le routeur serveur diffuse chaque piste au fil de sa pose…')
-    const t0 = Date.now()
-    let finished = false
+    /* pacingMs = simple rythme FILAIRE (3 ms) : le tempo visuel, lui, est donné
+     * par la lecture locale à BASE_TICK_MS / liveSpeed — d'où une vitesse
+     * réglable ×0.5 … ×4 en plein vol, sans négocier avec le serveur. */
+    let failed = false
     try {
       const res = await fetch('/api/routing/live', {
         method: 'POST',
@@ -300,44 +449,34 @@ export const useStudio = create<StudioState>((set, get) => ({
             const trace: TraceEvent = ev.t === 'segment'
               ? { type: 'segment', net: ev.net, segment: ev.segment }
               : { type: 'via', net: ev.net, via: ev.via }
-            get().pushLiveTrace(trace)
+            liveEnqueue({ k: 'trace', ev: trace })
           } else if (ev.t === 'progress') {
-            get().setLiveProgress(ev)
-            if (!ev.ok) get().dropLiveNet(ev.net) // retire les traces fantômes d'un net en échec
+            liveEnqueue({ k: 'progress', p: ev })
           } else if (ev.t === 'phase') {
-            get().setLivePhase(ev.phase)
+            liveEnqueue({ k: 'phase', phase: ev.phase })
           } else if (ev.t === 'hello') {
-            get().setLiveProgress({ done: 0, total: ev.total, net: '—', ok: true })
+            liveEnqueue({ k: 'hello', total: ev.total })
           } else if (ev.t === 'complete') {
-            finished = true
-            const routing = ev.result
-            // Finalisation locale : même chaîne d'analyse que le pipeline
-            const constraints = extractConstraints(nl)
-            const routeMap = new Map(routing.routes.map((r) => [r.net, r]))
-            const si = analyzeSi(nl, routeMap, (cls) => DEFAULT_RULES.widths[cls as keyof typeof DEFAULT_RULES.widths] ?? 0.25, constraints)
-            const thermal = get().result.thermal ?? solveThermal(nl, placements)
-            const drc = runDrc(nl, placements, routing, thermal, DEFAULT_RULES, constraints)
-            const dfm = runDfm(nl, placements, routing, DEFAULT_RULES)
-            const gerber = generateGerber(nl, placements, routing)
-            gerber.files.push(...generateFirmwareBridge(nl).files)
-            set((st) => ({ result: { ...st.result, routing, si, thermal, drc, dfm, gerber } }))
-            get().log('system', 'success',
-              `[DEEPPCB] Routage live terminé en ${((Date.now() - t0) / 1000).toFixed(1)} s — ${routing.routedNets}/${routing.totalNets} nets · ${routing.viaCount} vias${routing.viasRemoved ? ` (−${routing.viasRemoved})` : ''} · DFM ${dfm.score}/100 — analyse + export régénérés`)
+            liveEnqueue({ k: 'complete', result: ev.result })
           } else if (ev.t === 'error') {
             throw new Error(ev.message)
           }
         }
       }
-      if (!finished) throw new Error('flux interrompu avant la fin du routage')
     } catch (e) {
+      failed = true
       const aborted = e instanceof DOMException && e.name === 'AbortError'
       get().log('system', aborted ? 'warn' : 'error',
         aborted
-          ? '[DEEPPCB] Flux de routage live interrompu par l’utilisateur.'
+          ? (liveStopReason === 'nudge'
+              ? '[NUDGE LIVE] Flux coupé — re-routage en direct avec la nouvelle position…'
+              : '[DEEPPCB] Flux de routage live interrompu par l’utilisateur.')
           : `[DEEPPCB] Échec du flux live : ${e instanceof Error ? e.message : 'erreur inconnue'}`)
     } finally {
       liveAbort = null
-      get().endLiveRouting()
+      liveStopReason = null
+      if (failed) liveFinish() // flux mort → session fermée immédiatement
+      else liveNoteStreamEnd() // la lecture locale peut encore drainer la file
     }
   },
 
@@ -345,6 +484,8 @@ export const useStudio = create<StudioState>((set, get) => ({
     cancelFlag = false
     liveAbort?.abort()
     liveAbort = null
+    liveFlush()
+    liveStreamDone = false
     set({ stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null, running: false, cancelled: false, liveRouting: idleLive(), liveRoutes: [] })
   },
 
@@ -379,13 +520,13 @@ export const useStudio = create<StudioState>((set, get) => ({
         onPlacements: (p) => set({ livePlacements: [...p] }),
         onCostHistory: (h) => { if (h.length) set({ costHistory: h }) },
         shouldCancel: () => cancelFlag,
-        onRoutingTrace: (ev) => get().pushLiveTrace(ev),
-        onRoutingPhase: (phase) => get().setLivePhase(phase),
-        onRoutingProgress: (p) => {
-          get().setLiveProgress(p)
-          if (!p.ok) get().dropLiveNet(p.net)
-        },
+        onRoutingTrace: (ev) => liveEnqueue({ k: 'trace', ev }),
+        onRoutingPhase: (phase) => liveEnqueue({ k: 'phase', phase }),
+        onRoutingProgress: (p) => liveEnqueue({ k: 'progress', p }),
       })
+
+      // Laisse la lecture locale finir de dessiner le flux avant de clore la session
+      await liveDrained()
 
       const routeRate = result.routing.routedNets / Math.max(1, result.routing.totalNets)
       const status = result.drc.errors === 0 && routeRate >= 0.98 ? 'success' : routeRate > 0.8 ? 'partial' : 'error'
@@ -418,6 +559,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Erreur inconnue'
       const cancelled = msg === 'ANNULÉ'
+      liveFlush()
       set({ running: false, cancelled, liveRouting: idleLive(), liveRoutes: [] })
       get().log('system', cancelled ? 'warn' : 'error', cancelled ? '═══ PIPELINE ANNULÉ PAR L’UTILISATEUR ═══' : `═══ ÉCHEC DU PIPELINE : ${msg} ═══`)
       if (!cancelled) {
