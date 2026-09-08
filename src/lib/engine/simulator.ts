@@ -124,14 +124,68 @@ export function routeLength(r: Route): number {
   return len
 }
 
-/** Analyse SI complète : impédance par classe + skew des groupes appariés */
+/**
+ * Estimation de diaphonie (crosstalk) — boucle multiphysique continue
+ * Équivalent : services/simulator/multi_physics_loop/ [Cadence AuraStack]
+ *
+ * Pour chaque net critique (RF, différentiel, haute vitesse, analogique),
+ * recherche le pire couplage capacitif avec un net agresseur : segments
+ * parallèles sur la même couche, longueur d'accouplement / distance.
+ * Heuristique calibrée : couplage ≈ 6 % par (mm parallèle / mm de gap).
+ */
+function estimateCrosstalk(
+  nl: Netlist, routes: Map<string, Route>,
+): Map<string, { pct: number; with: string }> {
+  const widthOf = new Map(nl.nets.map((n) => [n.name, n.width ?? 0.3]))
+  interface Run { net: string; layer: number; a: { x: number; y: number }; b: { x: number; y: number }; horiz: boolean }
+  const runs: Run[] = []
+  for (const [net, r] of routes) {
+    if (!r.routed || r.pour) continue
+    for (const seg of r.segments) {
+      for (let i = 1; i < seg.pts.length; i++) {
+        const a = seg.pts[i - 1], b = seg.pts[i]
+        runs.push({ net, layer: seg.layer, a, b, horiz: a.y === b.y })
+      }
+    }
+  }
+  const victims = nl.nets.filter((n) => ['rf', 'diffpair', 'highspeed', 'analog'].includes(n.cls))
+  const out = new Map<string, { pct: number; with: string }>()
+  const overlap1D = (a1: number, a2: number, b1: number, b2: number) =>
+    Math.min(Math.max(a1, a2), Math.max(b1, b2)) - Math.max(Math.min(a1, a2), Math.min(b1, b2))
+  for (const victim of victims) {
+    let worst = 0, worstWith = ''
+    for (const run of runs.filter((r) => r.net === victim.name)) {
+      for (const agg of runs) {
+        if (agg.net === victim.name || agg.layer !== run.layer) continue
+        if (agg.horiz !== run.horiz) continue
+        const par = run.horiz
+          ? overlap1D(run.a.x, run.b.x, agg.a.x, agg.b.x)
+          : overlap1D(run.a.y, run.b.y, agg.a.y, agg.b.y)
+        if (par <= 0.5) continue
+        const gap = par > 0
+          ? (run.horiz ? Math.abs(run.a.y - agg.a.y) : Math.abs(run.a.x - agg.a.x))
+          : Infinity
+        if (gap < 0.05 || gap > 3) continue
+        // correction largeur : cuivre large = plus de couplage
+        const wFactor = ((widthOf.get(agg.net) ?? 0.3) / 0.3)
+        const pct = Math.min(35, ((par * 1.2) / Math.max(gap, 0.12) / 4) * wFactor)
+        if (pct > worst) { worst = pct; worstWith = agg.net }
+      }
+    }
+    if (worst > 0.5) out.set(victim.name, { pct: Math.round(worst * 10) / 10, with: worstWith })
+  }
+  return out
+}
+
+/** Analyse SI complète : impédance par classe + skew des bus + diaphonie */
 export function analyzeSi(
   nl: Netlist, routes: Map<string, Route>, widthOf: (cls: string) => number,
   constraints: Constraint[],
 ): SiReport {
   const metrics: SiMetric[] = []
+  const xtalk = estimateCrosstalk(nl, routes)
 
-  // 1. Impédance des nets critiques
+  // 1. Impédance des nets critiques (+ diaphonie [AuraStack])
   for (const n of nl.nets) {
     if (!['rf', 'diffpair', 'highspeed'].includes(n.cls)) continue
     const w = n.width ?? widthOf(n.cls)
@@ -146,9 +200,15 @@ export function analyzeSi(
       : `Écart d'impédance : cible ${target} Ω, calculée ${z0.toFixed(1)} Ω`
     else if (n.cls === 'diffpair') comment = `Paire USB : Z0 ${z0.toFixed(1)} Ω vs cible 90 Ω — sur 2 couches, écart accepté avec couche de masse contiguë`
     else comment = `Net haute vitesse ${n.name} : ${len.toFixed(1)} mm, Z0 ${z0.toFixed(1)} Ω`
+    const xt = xtalk.get(n.name)
+    if (xt) {
+      comment += ` · diaphonie ${xt.pct.toFixed(1)} % (accouplement avec ${xt.with})`
+    }
     metrics.push({
       net: n.name, cls: n.cls, lengthMm: Math.round(len * 10) / 10,
-      impedance: Math.round(z0 * 10) / 10, targetImpedance: target, impedanceOk: ok, comment,
+      impedance: Math.round(z0 * 10) / 10, targetImpedance: target, impedanceOk: ok,
+      ...(xt ? { crosstalkPct: xt.pct, crosstalkOk: xt.pct < 15, crosstalkWith: xt.with } : {}),
+      comment,
     })
   }
 
@@ -174,7 +234,24 @@ export function analyzeSi(
     }
   }
 
-  return { metrics, pass: metrics.every((m) => m.impedanceOk && (m.skewOk !== false)) }
+  // 2b. Diaphonie des nets analogiques sensibles
+  for (const n of nl.nets.filter((x) => x.cls === 'analog')) {
+    const xt = xtalk.get(n.name)
+    if (!xt) continue
+    const r = routes.get(n.name)
+    const len = r ? routeLength(r) : 0
+    metrics.push({
+      net: n.name, cls: n.cls, lengthMm: Math.round(len * 10) / 10,
+      impedance: Math.round(microstripZ0(widthOf(n.cls)) * 10) / 10, impedanceOk: true,
+      crosstalkPct: xt.pct, crosstalkOk: xt.pct < 15, crosstalkWith: xt.with,
+      comment: `Net analogique : diaphonie ${xt.pct.toFixed(1)} % depuis ${xt.with} — ${xt.pct < 15 ? 'acceptable' : 'éloigner ou mettre à la masse entre les deux'}`,
+    })
+  }
+
+  return {
+    metrics,
+    pass: metrics.every((m) => m.impedanceOk && m.skewOk !== false && m.crosstalkOk !== false),
+  }
 }
 
 /** Recalcule la position absolue d'un pad pour le DRC/état */

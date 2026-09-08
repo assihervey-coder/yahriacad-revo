@@ -9,12 +9,19 @@ import type {
 import { NETLISTS, getNetlist } from '@/lib/engine/netlists'
 import { runPipeline } from '@/lib/engine/orchestrator'
 import { extractConstraints } from '@/lib/engine/parser'
+import { routeAll } from '@/lib/engine/router'
+import { analyzeSi } from '@/lib/engine/simulator'
+import { runDfm, runDrc } from '@/lib/engine/drc'
+import { generateGerber } from '@/lib/engine/gerber'
+import { generateFirmwareBridge } from '@/lib/engine/firmware'
+import { DEFAULT_RULES } from '@/lib/engine/rules'
 
 const STAGE_DEFS: { id: StageId; label: string }[] = [
   { id: 'import', label: 'Import' },
   { id: 'constraints', label: 'Contraintes' },
   { id: 'intent', label: 'Intention LLM' },
   { id: 'placement', label: 'Placement RL' },
+  { id: 'optimize', label: 'Optimisation' },
   { id: 'thermal', label: 'Thermique' },
   { id: 'routing', label: 'Routage' },
   { id: 'drc', label: 'DRC/DFM' },
@@ -41,10 +48,12 @@ export interface RunHistoryItem {
 interface StudioState {
   netlistId: string
   netlist: Netlist
+  customNetlists: Netlist[]
   stages: Record<StageId, StageState>
   logs: LogEntry[]
   running: boolean
   cancelled: boolean
+  surgicalBusy: boolean
   result: Partial<DesignResult>
   livePlacements: PlacedComponent[] | null
   costHistory: number[]
@@ -59,6 +68,8 @@ interface StudioState {
   }
   history: RunHistoryItem[]
   setProject: (id: string) => void
+  addCustomNetlist: (nl: Netlist) => void
+  surgicalMove: (ref: string, dx: number, dy: number) => Promise<void>
   log: (stage: LogEntry['stage'], level: LogEntry['level'], msg: string) => void
   run: () => Promise<void>
   cancel: () => void
@@ -72,10 +83,12 @@ let cancelFlag = false
 export const useStudio = create<StudioState>((set, get) => ({
   netlistId: NETLISTS[0].id,
   netlist: NETLISTS[0],
+  customNetlists: [],
   stages: initialStages(),
   logs: [{ ts: Date.now(), stage: 'system', level: 'info', msg: 'NEXUS PCB Studio prêt — sélectionnez un projet et lancez la conception autonome.' }],
   running: false,
   cancelled: false,
+  surgicalBusy: false,
   result: {},
   livePlacements: null,
   costHistory: [],
@@ -85,7 +98,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   history: [],
 
   setProject: (id) => {
-    const nl = getNetlist(id)
+    const nl = get().customNetlists.find((x) => x.id === id) ?? getNetlist(id)
     set({
       netlistId: id,
       netlist: nl,
@@ -99,6 +112,58 @@ export const useStudio = create<StudioState>((set, get) => ({
       viewer: { ...get().viewer, selectedRef: null },
     })
     void get().loadHistory()
+  },
+
+  addCustomNetlist: (nl) => {
+    set((s) => ({ customNetlists: [...s.customNetlists.filter((x) => x.id !== nl.id), nl] }))
+    get().setProject(nl.id)
+  },
+
+  /* ---------------- Éditeur chirurgical [Flux.ai] ----------------
+   * Modification localisée SANS relancer la conception : déplacement
+   * fin d'un composant, puis re-routage + DRC/DFM + ré-export.
+   * Le placement des autres composants et la thermique sont préservés. */
+  surgicalMove: async (ref, dx, dy) => {
+    const s = get()
+    if (s.running || s.surgicalBusy || !s.livePlacements || !s.result.thermal) return
+    set({ surgicalBusy: true, livePlacements: s.livePlacements.map((p) => p.ref === ref ? { ...p, x: p.x + dx, y: p.y + dy } : p) })
+    const t0 = Date.now()
+    get().log('system', 'agent', `[CHIRURGIE] ${ref} déplacé de (${dx > 0 ? '+' : ''}${dx}, ${dy > 0 ? '+' : ''}${dy}) mm — re-routage incrémental…`)
+    await new Promise((r) => setTimeout(r, 40)) // laisse le viewer rafraîchir
+    try {
+      const placements = get().livePlacements!
+      const nl = get().netlist
+      // Ramène le composant dans la carte si le déplacement le fait sortir
+      const clamped = placements.map((p) => {
+        const c = nl.components.find((x) => x.ref === p.ref)
+        if (!c || p.ref !== ref) return p
+        const swap = p.rot === 90 || p.rot === 270
+        const w = swap ? c.footprint.h : c.footprint.w
+        const h = swap ? c.footprint.w : c.footprint.h
+        return {
+          ...p,
+          x: Math.min(nl.board.w - w / 2 - 0.4, Math.max(w / 2 + 0.4, p.x)),
+          y: Math.min(nl.board.h - h / 2 - 0.4, Math.max(h / 2 + 0.4, p.y)),
+        }
+      })
+      const constraints = extractConstraints(nl)
+      const routing = routeAll(nl, clamped, DEFAULT_RULES, constraints)
+      const routeMap = new Map(routing.routes.map((r) => [r.net, r]))
+      const si = analyzeSi(nl, routeMap, (cls) => DEFAULT_RULES.widths[cls as keyof typeof DEFAULT_RULES.widths] ?? 0.25, constraints)
+      const drc = runDrc(nl, clamped, routing, get().result.thermal!, DEFAULT_RULES, constraints)
+      const dfm = runDfm(nl, clamped, routing, DEFAULT_RULES)
+      const gerber = generateGerber(nl, clamped, routing)
+      gerber.files.push(...generateFirmwareBridge(nl).files)
+      set((st) => ({
+        livePlacements: clamped,
+        result: { ...st.result, routing, si, drc, dfm, gerber },
+        surgicalBusy: false,
+      }))
+      get().log('system', 'success', `[CHIRURGIE] Terminé en ${Date.now() - t0} ms — ${routing.routedNets}/${routing.totalNets} nets · ${routing.viaCount} vias${routing.viasRemoved ? ` (−${routing.viasRemoved})` : ''} · DRC ${drc.errors} erreur(s) · placement et thermique préservés`)
+    } catch (e) {
+      set({ surgicalBusy: false })
+      get().log('system', 'error', `[CHIRURGIE] échec : ${e instanceof Error ? e.message : 'erreur inconnue'}`)
+    }
   },
 
   log: (stage, level, msg) =>

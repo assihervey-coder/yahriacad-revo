@@ -4,7 +4,7 @@
  */
 import {
   CheckCircle2, Circle, FileInput, Layers, Route as RouteIcon,
-  ShieldCheck, Sparkles, Thermometer, XCircle, Boxes,
+  ShieldCheck, Sparkles, Thermometer, XCircle, Boxes, TrendingUp,
 } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 import type { StageId } from '@/lib/engine/types'
@@ -15,6 +15,7 @@ const ICONS: Record<StageId, React.ComponentType<{ className?: string }>> = {
   constraints: Layers,
   intent: Sparkles,
   placement: Boxes,
+  optimize: TrendingUp,
   thermal: Thermometer,
   routing: RouteIcon,
   drc: ShieldCheck,
@@ -23,10 +24,10 @@ const ICONS: Record<StageId, React.ComponentType<{ className?: string }>> = {
 
 export function StageStrip() {
   const stages = useStudio((s) => s.stages)
-  const order: StageId[] = ['import', 'constraints', 'intent', 'placement', 'thermal', 'routing', 'drc', 'export']
+  const order: StageId[] = ['import', 'constraints', 'intent', 'placement', 'optimize', 'thermal', 'routing', 'drc', 'export']
 
   return (
-    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 xl:grid-cols-8" role="list" aria-label="Étapes du pipeline">
+    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-9" role="list" aria-label="Étapes du pipeline">
       {order.map((id, i) => {
         const st = stages[id]
         const Icon = ICONS[id]

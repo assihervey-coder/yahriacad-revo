@@ -190,6 +190,9 @@ export function routeAll(
 
   const routedSet = new Set<number>()
 
+  /** Coût d'une transition de couche (via) — majoré par le via_minimizer [DeepPCB] */
+  let viaCost = 14
+
   function passable(i: number, ni: number, relaxed = false): boolean {
     if (occupied[i] !== -1 && occupied[i] !== ni) return false
     if (!relaxed && dilated[i] !== -1 && dilated[i] !== ni) return false
@@ -217,7 +220,7 @@ export function routeAll(
       gStamp[t] = stamp; gVal[t] = 0; parent[t] = -1
       heap.push(t, h(t))
     }
-    const VIA_COST = 14
+    const VIA_COST = viaCost
     let expansions = 0
     while (heap.size > 0) {
       const cur = heap.pop()
@@ -519,6 +522,35 @@ export function routeAll(
     if (!progress) break
   }
 
+  /* ---- Passe 2b : MINIMISATION DES VIAS [DeepPCB via_minimizer] ----
+   * Chaque net routé possédant des vias est re-routé avec un coût de via
+   * fortement majoré : si une variante avec moins de transitions de couche
+   * existe dans l'espace libre actuel, elle remplace la première passe.
+   * Garde-fou : longueur acceptée jusqu'à +30 % (+2 mm) — un via coûte plus
+   * cher qu'un détour (fiabilité, insertion, fabrication). */
+  let viasRemoved = 0
+  {
+    viaCost = 46
+    const candidates = [...routedStore.keys()].filter((ni) => routedStore.get(ni)!.vias.length > 0)
+    for (const ni of candidates) {
+      if (opts.shouldCancel?.()) break
+      const before = routedStore.get(ni)!
+      routedStore.delete(ni)
+      rebuildMasks()
+      const r = attemptRoute(ni)
+      const after = routedStore.get(ni)
+      if (r.ok && after && after.vias.length < before.vias.length && after.lengthMm <= before.lengthMm * 1.3 + 2) {
+        viasRemoved += before.vias.length - after.vias.length
+        opts.onProgress?.({ done, total: ordered.length, net: `${nl.nets[ni].name} (−${before.vias.length - after.vias.length} via)`, ok: true })
+      } else {
+        // Variante pas assez bonne → restauration de la route d'origine
+        routedStore.set(ni, before)
+        rebuildMasks()
+      }
+    }
+    viaCost = 14
+  }
+
   /* ---- Passe 3 : plan de masse synthétique (copper pour B.Cu) ----
    * Les nets de masse irroutables sont connectés par un plan cuivre généré
    * sur la couche inférieure : toutes les cellules libres, inondées depuis
@@ -616,6 +648,7 @@ export function routeAll(
     totalNets: ordered.length,
     totalLengthMm: Math.round(totalLen * 10) / 10,
     viaCount,
+    viasRemoved,
     groundPour,
     durationMs: Date.now() - t0,
   }

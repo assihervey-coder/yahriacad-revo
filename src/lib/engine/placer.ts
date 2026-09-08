@@ -35,7 +35,9 @@ export function initialPlacement(nl: Netlist, plan: AgentPlan, constraints: Cons
 
   const snap = (v: number) => Math.round(v * 4) / 4
 
-  // 1. Connecteurs : alignés sur le bord sud, répartis (sauf antenne → coin NE)
+  // 1. Connecteurs : alignés sur le bord sud — les connecteurs « profonds »
+  // pivotent pour courir LE LONG du bord (pratique industrielle), puis
+  // packing 1D sans chevauchement (largeurs réelles + espacement).
   const connectors = nl.components.filter((c) => edgeConstraints.has(c.ref))
   const antenna = connectors.filter((c) => c.category === 'rf')
   const others = connectors.filter((c) => c.category !== 'rf')
@@ -43,11 +45,24 @@ export function initialPlacement(nl: Netlist, plan: AgentPlan, constraints: Cons
     placed.push({ ref: c.ref, x: W - c.footprint.w / 2 - 1.5, y: H - c.footprint.h / 2 - 3, rot: 0, side: 'top', fixed: true })
     used.add(c.ref)
   }
-  others.forEach((c, i) => {
-    const x = (W * (i + 1)) / (others.length + 1)
-    placed.push({ ref: c.ref, x: snap(x), y: c.footprint.h / 2 + 0.8, rot: 0, side: 'top', fixed: true })
-    used.add(c.ref)
+  const EDGE_GAP = 1.2
+  const laid = others.map((c) => {
+    const alongEdge = c.footprint.h > c.footprint.w + 0.5
+    return {
+      c,
+      rot: (alongEdge ? 90 : 0) as 0 | 90,
+      effW: alongEdge ? c.footprint.h : c.footprint.w,
+      effH: alongEdge ? c.footprint.w : c.footprint.h,
+    }
   })
+  const totalW = laid.reduce((s, l) => s + l.effW, 0) + EDGE_GAP * (laid.length + 1)
+  // Si le bord est trop court, on tasse depuis la gauche avec une marge réduite
+  let cursor = totalW >= W ? 0.6 : (W - totalW) / 2 + EDGE_GAP
+  for (const l of laid) {
+    placed.push({ ref: l.c.ref, x: snap(cursor + l.effW / 2), y: snap(l.effH / 2 + 0.8), rot: l.rot, side: 'top', fixed: true })
+    used.add(l.c.ref)
+    cursor += l.effW + EDGE_GAP
+  }
 
   // 2. MCU au centre, puis tous les composants non fixés par zones
   for (const c of nl.components) {
@@ -104,6 +119,18 @@ export function legalizePlacement(nl: Netlist, placements: PlacedComponent[]): P
       return { ref: p.ref, x: p.x, y: p.y, w: swap ? c.footprint.h : c.footprint.w, h: swap ? c.footprint.w : c.footprint.h, area: c.footprint.w * c.footprint.h, fixed: !!p.fixed }
     })
   const GAP = 0.35
+  // Bornage par CORPS (pas par centre) : un gros boîtier (ESP32, BGA…) doit
+  // rester intégralement dans la carte — audit Fuse SV-BOUNDS
+  const bodyHalf = (p: typeof out[number]) => {
+    const c = compByRef.get(p.ref)!
+    const swap = p.rot === 90 || p.rot === 270
+    return { hw: (swap ? c.footprint.h : c.footprint.w) / 2, hh: (swap ? c.footprint.w : c.footprint.h) / 2 }
+  }
+  for (const p of out) {
+    const { hw, hh } = bodyHalf(p)
+    p.x = Math.min(nl.board.w - hw - 0.3, Math.max(hw + 0.3, p.x))
+    p.y = Math.min(nl.board.h - hh - 0.3, Math.max(hh + 0.3, p.y))
+  }
   const stuck = new Map<string, number>()
   for (let pass = 0; pass < 120; pass++) {
     const rs = rects()
@@ -132,10 +159,24 @@ export function legalizePlacement(nl: Netlist, placements: PlacedComponent[]): P
       const ny = useX ? 0 : Math.sign(push.y - other.y || 1)
       const dist = (useX ? ox : oy) + GAP
       const idx = out.findIndex((p) => p.ref === push.ref)
+      const beforeX = out[idx].x, beforeY = out[idx].y
+      const { hw, hh } = bodyHalf(out[idx])
       out[idx] = {
         ...out[idx],
-        x: Math.min(nl.board.w - 0.8, Math.max(0.8, push.x + nx * dist)),
-        y: Math.min(nl.board.h - 0.8, Math.max(0.8, push.y + ny * dist)),
+        x: Math.min(nl.board.w - hw - 0.3, Math.max(hw + 0.3, push.x + nx * dist)),
+        y: Math.min(nl.board.h - hh - 0.3, Math.max(hh + 0.3, push.y + ny * dist)),
+      }
+      // Si le poussé est coincé au bord (clamp = aucun mouvement), pousse
+      // l'autre en sens inverse — sinon le chevauchement persiste pour toujours
+      const moved = Math.abs(out[idx].x - beforeX) + Math.abs(out[idx].y - beforeY) > 0.01
+      if (!moved && !other.fixed) {
+        const idxO = out.findIndex((p) => p.ref === other.ref)
+        const { hw: hwO, hh: hhO } = bodyHalf(out[idxO])
+        out[idxO] = {
+          ...out[idxO],
+          x: Math.min(nl.board.w - hwO - 0.3, Math.max(hwO + 0.3, other.x - nx * dist)),
+          y: Math.min(nl.board.h - hhO - 0.3, Math.max(hhO + 0.3, other.y - ny * dist)),
+        }
       }
     }
   }

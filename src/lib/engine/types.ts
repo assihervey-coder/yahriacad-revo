@@ -179,6 +179,8 @@ export interface RoutingSolution {
   totalNets: number
   totalLengthMm: number
   viaCount: number
+  /** [DeepPCB via_minimizer] vias éliminés par la passe de minimisation */
+  viasRemoved?: number
   durationMs: number
   /** cellules du plan de masse synthétique (coordonnées mm, par couche) */
   groundPour?: {
@@ -214,6 +216,11 @@ export interface SiMetric {
   impedanceOk: boolean
   skewMm?: number         // écart de longueur intra-paire/groupe
   skewOk?: boolean
+  /** [AuraStack multi_physics_loop] diaphonie estimée (% de couplage) */
+  crosstalkPct?: number
+  crosstalkOk?: boolean
+  /** net agresseur dominant (diaphonie max) */
+  crosstalkWith?: string
   comment: string
 }
 
@@ -284,7 +291,7 @@ export interface GerberPackage {
 
 export type StageId =
   | 'import' | 'constraints' | 'intent' | 'placement'
-  | 'thermal' | 'routing' | 'drc' | 'export'
+  | 'optimize' | 'thermal' | 'routing' | 'drc' | 'export'
 
 export type StageStatus = 'pending' | 'running' | 'done' | 'error'
 
@@ -304,6 +311,29 @@ export interface LogEntry {
   msg: string
 }
 
+/* ------------------------- Rapports agents v2 ------------------------- */
+
+/** [AutoPCB autonomous_optimizer] bilan de la boucle ratchet proposer →
+ *  évaluer (< 5 s) → garder — amélioration continue sans intervention humaine */
+export interface OptimizerReport {
+  proposals: number
+  accepted: number
+  costBefore: number
+  costAfter: number
+  gainPct: number
+  durationMs: number
+}
+
+/** [Siemens Fuse self_verifier] audit déterministe indépendant des agents */
+export interface SelfVerifyReport {
+  placementPass: boolean
+  placementViolations: string[]
+  routingPass: boolean
+  routingViolations: string[]
+  rolledBack: boolean
+  notes: string[]
+}
+
 export interface DesignResult {
   plan: AgentPlan
   placement: PlacementSolution
@@ -313,4 +343,8 @@ export interface DesignResult {
   drc: DrcReport
   dfm: DfmReport
   gerber: GerberPackage
+  /** [AutoPCB] bilan de la boucle d'optimisation autonome */
+  optimization?: OptimizerReport
+  /** [Siemens Fuse] rapport d'auto-vérification physique */
+  verification?: SelfVerifyReport
 }

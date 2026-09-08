@@ -1,12 +1,23 @@
 'use client'
 /**
- * NEXUS PCB — En-tête du studio : identité, sélection projet, contrôle du pipeline
+ * NEXUS PCB — En-tête du studio : identité, sélection projet, générateur IA
+ * [Circuitron nl_to_skidl], contrôle du pipeline
  */
-import { Cpu, Loader2, Play, Square } from 'lucide-react'
+import { useState } from 'react'
+import { Cpu, Loader2, Play, Sparkles, Square } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 import { NETLISTS } from '@/lib/engine/netlists'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+
+const EXAMPLES = [
+  'Une carte drone : STM32, IMU, récepteur RC et régulateur 5V',
+  'Un capteur LoRa sur batterie avec charge solaire',
+  'Une carte de test USB-C avec ESP32 et 8 LED',
+]
 
 export function StudioHeader() {
   const netlistId = useStudio((s) => s.netlistId)
@@ -14,11 +25,47 @@ export function StudioHeader() {
   const cancelled = useStudio((s) => s.cancelled)
   const drcSummary = useStudio((s) => s.result.drc)
   const done = useStudio((s) => Object.values(s.stages).every((st) => st.status === 'done'))
+  const customNetlists = useStudio((s) => s.customNetlists)
   const run = useStudio((s) => s.run)
   const cancel = useStudio((s) => s.cancel)
   const setProject = useStudio((s) => s.setProject)
+  const addCustomNetlist = useStudio((s) => s.addCustomNetlist)
+  const log = useStudio((s) => s.log)
 
-  const nl = NETLISTS.find((n) => n.id === netlistId)!
+  const [genOpen, setGenOpen] = useState(false)
+  const [prompt, setPrompt] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState<string | null>(null)
+
+  const all = [...NETLISTS, ...customNetlists]
+  const nl = all.find((n) => n.id === netlistId) ?? NETLISTS[0]
+
+  const generate = async () => {
+    if (generating || prompt.trim().length < 10) return
+    setGenerating(true)
+    setGenError(null)
+    try {
+      const res = await fetch('/api/agent/netlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt.trim() }),
+      })
+      const data = await res.json() as { netlist?: import('@/lib/engine/types').Netlist; warnings?: string[]; error?: string }
+      if (!res.ok || !data.netlist) {
+        setGenError(data.error ?? 'Génération impossible — reformulez.')
+        return
+      }
+      addCustomNetlist(data.netlist)
+      for (const w of data.warnings ?? []) log('system', 'warn', `[CIRCUITRON] ${w}`)
+      log('system', 'agent', `[CIRCUITRON] Netlist générée : ${data.netlist.name} — ${data.netlist.components.length} composants, ${data.netlist.nets.length} nets (langage naturel → connectivité validée)`)
+      setGenOpen(false)
+      setPrompt('')
+    } catch {
+      setGenError('Agent générateur injoignable.')
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   return (
     <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-emerald-900/40 bg-[#081109]/90 px-4 py-2.5 backdrop-blur">
@@ -31,25 +78,36 @@ export function StudioHeader() {
             NEXUS <span className="text-emerald-500">PCB</span>
           </div>
           <div className="text-[10px] uppercase tracking-[0.18em] text-emerald-600/90">
-            Conception autonome par agents IA
+            Conception autonome par essaim d&apos;agents IA
           </div>
         </div>
       </div>
 
-      <div className="ml-2 min-w-[220px]">
+      <div className="ml-2 min-w-[200px]">
         <Select value={netlistId} onValueChange={setProject} disabled={running}>
           <SelectTrigger className="h-8 border-emerald-900/60 bg-black/40 text-xs text-emerald-100" aria-label="Sélection du projet">
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="border-emerald-900 bg-[#0a130d] text-emerald-100">
-            {NETLISTS.map((n) => (
+            {all.map((n) => (
               <SelectItem key={n.id} value={n.id} className="text-xs">
-                {n.name} — {n.components.length} composants
+                {n.name} — {n.components.length} composants{n.id.startsWith('custom-') ? ' ✨' : ''}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
+
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={running}
+        className="h-8 gap-1.5 border-fuchsia-800/60 bg-fuchsia-950/30 px-2.5 text-[11px] text-fuchsia-300 hover:bg-fuchsia-900/40 hover:text-fuchsia-200"
+        onClick={() => setGenOpen(true)}
+        title="Décrivez votre carte en langage naturel — l'agent Circuitron génère la netlist"
+      >
+        <Sparkles className="h-3.5 w-3.5" /> Générer par IA
+      </Button>
 
       <div className="hidden text-[11px] text-neutral-500 md:block">{nl.board.w}×{nl.board.h} mm · 2 couches · FR4</div>
 
@@ -85,6 +143,59 @@ export function StudioHeader() {
           </Button>
         )}
       </div>
+
+      {/* ---------- Générateur de netlist par langage naturel [Circuitron] ---------- */}
+      <Dialog open={genOpen} onOpenChange={setGenOpen}>
+        <DialogContent className="border-fuchsia-900/50 bg-[#0d0a12] text-emerald-50 sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <Sparkles className="h-4 w-4 text-fuchsia-400" />
+              Décrire une carte — l&apos;IA génère la netlist
+            </DialogTitle>
+            <DialogDescription className="text-[11px] text-neutral-400">
+              L&apos;agent <span className="text-fuchsia-300">Circuitron nl_to_skidl</span> sélectionne les composants
+              dans notre bibliothèque d&apos;empreintes réelles et construit la connectivité broche par broche.
+              Vous pourrez ensuite lancer la conception autonome complète.
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            rows={3}
+            placeholder="Ex : une carte télécommande avec nRF52840, joystick analogique, OLED I2C et charge USB-C…"
+            className="w-full resize-none rounded-md border border-neutral-800 bg-black/50 px-3 py-2 text-xs text-neutral-200 placeholder:text-neutral-600 focus:border-fuchsia-800 focus:outline-none"
+          />
+          <div className="flex flex-wrap gap-1.5">
+            {EXAMPLES.map((ex) => (
+              <button
+                key={ex}
+                onClick={() => setPrompt(ex)}
+                className="rounded-full border border-neutral-800 bg-black/40 px-2.5 py-1 text-[10px] text-neutral-400 transition-colors hover:border-fuchsia-800/60 hover:text-fuchsia-300"
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
+          {genError && (
+            <p className="rounded-md bg-red-950/40 px-2.5 py-1.5 text-[11px] text-red-300">{genError}</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" className="h-8 text-[11px] text-neutral-400" onClick={() => setGenOpen(false)}>
+              Annuler
+            </Button>
+            <Button
+              size="sm"
+              disabled={generating || prompt.trim().length < 10}
+              className="h-8 gap-1.5 bg-fuchsia-700 text-[11px] text-white hover:bg-fuchsia-600 disabled:opacity-40"
+              onClick={() => void generate()}
+            >
+              {generating
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Génération…</>
+                : <><Sparkles className="h-3.5 w-3.5" /> Générer la netlist</>}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </header>
   )
 }

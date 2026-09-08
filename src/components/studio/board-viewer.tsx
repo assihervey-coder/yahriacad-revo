@@ -85,6 +85,9 @@ export default function BoardViewer() {
   const result = useStudio((s) => s.result)
   const viewer = useStudio((s) => s.viewer)
   const setViewer = useStudio((s) => s.setViewer)
+  const surgicalMove = useStudio((s) => s.surgicalMove)
+  const surgicalBusy = useStudio((s) => s.surgicalBusy)
+  const pipelineRunning = useStudio((s) => s.running)
 
   /** null = test en cours · true = WebGL OK · false = repli 2D logiciel */
   const [webglOk, setWebglOk] = useState<boolean | null>(null)
@@ -536,6 +539,19 @@ export default function BoardViewer() {
         <div className="absolute right-3 top-3 rounded-md border border-emerald-700/50 bg-black/75 px-3 py-2 text-xs backdrop-blur">
           <div className="font-semibold text-emerald-300">{viewer.selectedRef}</div>
           <div className="text-neutral-300">{netlist.components.find((c) => c.ref === viewer.selectedRef)?.value}</div>
+          {/* Éditeur chirurgical [Flux.ai] : déplacement fin + re-routage incrémental */}
+          <div className="mt-1.5" title="Éditeur chirurgical — déplace de 2 mm puis re-route sans relancer la conception">
+            <div className="mb-0.5 text-[9px] uppercase tracking-wide text-neutral-500">chirurgie ±2 mm</div>
+            <div className="grid grid-cols-3 gap-0.5">
+              <span />
+              <button aria-label="Déplacer vers le haut" disabled={surgicalBusy || pipelineRunning} onClick={() => void surgicalMove(viewer.selectedRef!, 0, -2)} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">↑</button>
+              <span />
+              <button aria-label="Déplacer à gauche" disabled={surgicalBusy || pipelineRunning} onClick={() => void surgicalMove(viewer.selectedRef!, -2, 0)} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">←</button>
+              <button aria-label="Déplacer vers le bas" disabled={surgicalBusy || pipelineRunning} onClick={() => void surgicalMove(viewer.selectedRef!, 0, 2)} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">↓</button>
+              <button aria-label="Déplacer à droite" disabled={surgicalBusy || pipelineRunning} onClick={() => void surgicalMove(viewer.selectedRef!, 2, 0)} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">→</button>
+            </div>
+            {surgicalBusy && <div className="mt-1 text-[9px] text-emerald-400">re-routage incrémental…</div>}
+          </div>
           <button className="mt-1 text-[10px] text-neutral-500 hover:text-neutral-300" onClick={() => setViewer({ selectedRef: null })}>
             fermer
           </button>

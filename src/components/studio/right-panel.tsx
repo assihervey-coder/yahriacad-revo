@@ -1,10 +1,12 @@
 'use client'
 /**
  * NEXUS PCB — Panneau droit : détails pipeline, agents IA, analyses, export fabrication
+ * + cartes v2 : optimiseur ratchet [AutoPCB], audit [Siemens Fuse], diaphonie [AuraStack]
  */
 import { useMemo } from 'react'
 import {
-  Bot, CheckCircle2, Download, FileDown, Gauge, Thermometer, TriangleAlert, Zap,
+  Bot, CheckCircle2, Download, FileDown, Gauge, Repeat, ShieldCheck,
+  Thermometer, TriangleAlert, Zap,
 } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -13,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Sparkline } from './sparkline'
+import { CopilotChat } from './copilot-chat'
 
 function download(name: string, content: string) {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
@@ -47,7 +50,7 @@ export function RightPanel() {
   return (
     <Tabs defaultValue="pipeline" className="flex h-full flex-col gap-0">
       <TabsList className="h-8 w-full shrink-0 justify-start gap-0.5 rounded-none border-b border-emerald-900/40 bg-black/40 p-0.5">
-        {['pipeline', 'agents', 'analyse', 'export', 'historique'].map((t) => (
+        {['pipeline', 'agents', 'copilote', 'analyse', 'export', 'historique'].map((t) => (
           <TabsTrigger
             key={t}
             value={t}
@@ -161,6 +164,69 @@ export function RightPanel() {
             )}
           </section>
 
+          {/* --- Optimiseur autonome [AutoPCB] --- */}
+          {result.optimization && (
+            <section className="rounded-lg border border-amber-900/40 bg-amber-950/10 p-3" aria-label="Optimiseur ratchet">
+              <div className="mb-1.5 flex items-center gap-2">
+                <Repeat className="h-4 w-4 text-amber-400" />
+                <span className="text-[11px] font-semibold text-amber-200">Boucle ratchet [AutoPCB]</span>
+                <span className="ml-auto font-mono text-[9px] text-amber-600">{result.optimization.durationMs} ms</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 text-center text-[10px]">
+                <div className="rounded-md bg-black/40 py-1.5">
+                  <div className="font-bold text-amber-300">{result.optimization.accepted}/{result.optimization.proposals}</div>
+                  <div className="text-[9px] text-neutral-500">propositions gardées</div>
+                </div>
+                <div className="rounded-md bg-black/40 py-1.5">
+                  <div className="font-bold text-amber-300">{result.optimization.costBefore.toFixed(0)} → {result.optimization.costAfter.toFixed(0)}</div>
+                  <div className="text-[9px] text-neutral-500">coût World Model</div>
+                </div>
+                <div className="rounded-md bg-black/40 py-1.5">
+                  <div className="font-bold text-emerald-300">−{result.optimization.gainPct} %</div>
+                  <div className="text-[9px] text-neutral-500">gain sans régression</div>
+                </div>
+              </div>
+              <p className="mt-1.5 text-[9px] leading-snug text-neutral-500">
+                proposer → évaluer (World Model, µs) → garder uniquement mieux : le placement s’améliore en continu, jamais régressé.
+              </p>
+            </section>
+          )}
+
+          {/* --- Auto-vérification [Siemens Fuse] --- */}
+          {result.verification && (
+            <section className="rounded-lg border border-sky-900/40 bg-sky-950/10 p-3" aria-label="Auto-vérification">
+              <div className="mb-1.5 flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-sky-400" />
+                <span className="text-[11px] font-semibold text-sky-200">Self-verifier [Siemens Fuse]</span>
+                <Badge variant="outline" className={`ml-auto h-4.5 border px-1.5 text-[9px] ${
+                  result.verification.placementPass && result.verification.routingPass
+                    ? 'border-emerald-700 text-emerald-400' : 'border-amber-700 text-amber-400'
+                }`}>
+                  {result.verification.placementPass && result.verification.routingPass ? 'conforme' : 'écarts détectés'}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-[10px]">
+                <div className="flex items-center justify-between rounded-md bg-black/40 px-2 py-1">
+                  <span className="text-neutral-400">Audit placement (déterministe)</span>
+                  <span className={result.verification.placementPass ? 'text-emerald-400' : 'text-amber-400'}>
+                    {result.verification.placementPass ? '✓ conforme' : `${result.verification.placementViolations.length} écart(s)`}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between rounded-md bg-black/40 px-2 py-1">
+                  <span className="text-neutral-400">Audit routage (ouverts, clearances)</span>
+                  <span className={result.verification.routingPass ? 'text-emerald-400' : 'text-amber-400'}>
+                    {result.verification.routingPass ? '✓ conforme' : `${result.verification.routingViolations.length} écart(s)`}
+                  </span>
+                </div>
+                {result.verification.rolledBack && (
+                  <p className="rounded-md bg-amber-950/30 px-2 py-1 text-[9px] text-amber-300">
+                    Rollback appliqué : re-légalisation après violation, puis re-audit.
+                  </p>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* --- Routeur --- */}
           {routing && (
             <section className="rounded-lg border border-teal-900/40 bg-black/30 p-3">
@@ -179,12 +245,22 @@ export function RightPanel() {
                   <div className="text-[9px] text-neutral-500">mm de pistes</div>
                 </div>
                 <div className="rounded-md bg-black/40 py-1.5">
-                  <div className="font-bold text-teal-300">{routing.viaCount}</div>
-                  <div className="text-[9px] text-neutral-500">vias</div>
+                  <div className="font-bold text-teal-300">{routing.viaCount}{routing.viasRemoved ? <span className="text-emerald-400"> −{routing.viasRemoved}</span> : null}</div>
+                  <div className="text-[9px] text-neutral-500">vias {routing.viasRemoved ? '[DeepPCB]' : ''}</div>
                 </div>
               </div>
+              {routing.viasRemoved ? (
+                <p className="mt-1 text-[9px] text-emerald-500/80">
+                  via_minimizer : {routing.viasRemoved} transition(s) de couche éliminée(s) — fiabilité et fabricabilité accrues.
+                </p>
+              ) : null}
             </section>
           )}
+        </TabsContent>
+
+        {/* ============================ COPILOTE ============================ */}
+        <TabsContent value="copilote" className="mt-0 h-[calc(100%-2rem)]">
+          <CopilotChat />
         </TabsContent>
 
         {/* ============================ ANALYSE ============================ */}
@@ -228,6 +304,20 @@ export function RightPanel() {
                         {m.impedance.toFixed(0)} Ω{m.targetImpedance ? ` / ${m.targetImpedance} Ω` : ''}
                       </span>
                     </div>
+                    {m.crosstalkPct !== undefined && (
+                      <div className="mt-0.5 flex items-center gap-1.5">
+                        <span className="text-[9px] text-neutral-500">diaphonie</span>
+                        <div className="h-1 w-16 overflow-hidden rounded-full bg-neutral-800">
+                          <div
+                            className={`h-full ${m.crosstalkOk ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                            style={{ width: `${Math.min(100, (m.crosstalkPct / 35) * 100)}%` }}
+                          />
+                        </div>
+                        <span className={`font-mono text-[9px] ${m.crosstalkOk ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {m.crosstalkPct.toFixed(1)} % ← {m.crosstalkWith}
+                        </span>
+                      </div>
+                    )}
                     <div className="text-[9px] text-neutral-600">{m.comment}</div>
                   </div>
                 ))}
@@ -332,8 +422,9 @@ export function RightPanel() {
                 <Download className="h-3.5 w-3.5" /> Tout télécharger ({gerber.files.length} fichiers)
               </Button>
               <p className="text-[9px] leading-relaxed text-neutral-600">
-                Fichiers RS-274X (format 3.6, mm) + perçage Excellon + BOM/Pick&amp;Place — directement
-                exploitables par PCBWay, JLCPCB ou importables dans KiCad pour vérification.
+                Fichiers RS-274X (format 3.6, mm) + perçage Excellon + BOM/Pick&amp;Place + pinmap firmware
+                (.h / overlay Zephyr / JSON) — directement exploitables par PCBWay, JLCPCB, ou importables
+                dans KiCad pour vérification.
               </p>
             </>
           ) : (

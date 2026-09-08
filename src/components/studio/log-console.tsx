@@ -19,6 +19,7 @@ const STAGE_TAG: Record<string, string> = {
   constraints: 'CONTRAINTES',
   intent: 'AGENT-LLM',
   placement: 'AGENT-RL',
+  optimize: 'RATCHET',
   thermal: 'THERMIQUE',
   routing: 'ROUTEUR',
   drc: 'DRC/DFM',

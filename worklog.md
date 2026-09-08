@@ -61,3 +61,28 @@ Stage Summary:
 - Le viewer ne peut plus crasher : détection WebGL explicite + repli Canvas 2D fonctionnellement équivalent (même interactions, mêmes calques visuels).
 - Code source `src/` strictement propre côté TypeScript ; projet poussé sur GitHub.
 
+---
+Task ID: 3
+Agent: Super Z (agent principal)
+Task: Analyser l'arborescence v2 (intégration DeepPCB / Siemens Fuse / Cadence AuraStack / Flux.ai / Circuitron / AutoPCB), implémenter les optimisations correspondantes dans le moteur NEXUS PCB, puis commit + push.
+
+Work Log:
+- Analyse : 6 briques différenciantes identifiées comme implémentables dans notre moteur TypeScript in-browser (le reste — K8s, Neo4j, CUDA — noté comme roadmap infra).
+- `optimizer.ts` [AutoPCB] : boucle ratchet proposer → évaluer (World Model, µs) → garder (jamais de régression), 300 propositions, légalisation + réparation keepout finale. Gains mesurés : −13 % (CORE), −30,4 % (IoT), −22,7 % (RF).
+- `self-verifier.ts` [Siemens Fuse] : deterministic_checker (bornes par CORPS, chevauchements stricts, keepouts avec exemption chaîne RF, ouverts, largeurs, perçages, annular ring, clearance cuivre-cuivre) + rollback_manager (re-légalisation + re-audit). A détecté de VRAIS bugs : débordement de l'ESP32 hors carte, header 6 broches dévorant la carte.
+- `router.ts` [DeepPCB via_minimizer] : passe 2b — re-routage de chaque net à via avec coût de via majoré (14→46), garde si moins de vias et longueur ≤ +30 %. −2 à −8 vias par carte.
+- `firmware.ts` [Flux.ai firmware_bridge] : pin_exporter + header_generator → NEXUS_pinmap.h (C), .overlay (Zephyr devicetree), .json (CI). 71-106 broches exportées, ajoutées au package d'export.
+- `simulator.ts` [AuraStack multi_physics_loop] : estimation de diaphonie (crosstalk) pour nets RF/diff/highspeed/analogiques — couplage parallèle longueur/gap avec correction de largeur, intégrée aux métriques SI + UI (barre de niveau).
+- `orchestrator.ts` : nouvelles étapes 4b optimize (ratchet streaming live) et 4c audit Fuse ; audit routage 6c ; firmware dans l'export ; options planMode ('rules'|'llm') + ratchetProposals.
+- Corrections profondes induites par les audits : légalisateur borné par CORPS (plus par centre) avec repli « pousser l'autre » ; connecteurs profonds pivotés LE LONG du bord sud + packing 1D sans chevauchement ; bug critique du ratchet (rng() appelé DANS le prédicat findIndex → tirage corrompu → crash) corrigé.
+- Store : étape 'optimize', customNetlists + addCustomNetlist, surgicalMove (éditeur chirurgical : nudge ±2 mm → re-routage + DRC/DFM + ré-export Gerber/firmware, placement et thermique préservés).
+- API : `/api/agent/netlist` [Circuitron nl_to_skidl] (langage naturel → netlist valide : catalogue d'empreintes réel, broches vérifiées, classes déduites) ; `/api/agent/chat` [Flux.ai copilote] (contexte métriques complet) ; `/api/mcp` serveur MCP JSON-RPC 2.0 (nexus_list_projects, nexus_run_design, nexus_describe_capabilities) — Claude/Cursor peuvent piloter le PCB.
+- UI : bandeau 9 étapes (icône TrendingUp), tag console RATCHET, cartes AutoPCB/Fuse dans l'onglet agents, onglet copilote (chat), diaphonie visuelle dans analyse, compteur vias −N [DeepPCB], bouton « Générer par IA » dans le header (dialog), flèches chirurgicales ±2 mm dans le popup de sélection du viewer.
+- Tests : `scripts/test-engine.ts` étendu (ratchet sans régression, audits Fuse cohérents routeur, firmware bridge) → **TOUS LES TESTS PASSENT** (CORE 93 % routage/DFM 87, IoT 100 %/DFM 90, RF 81 %/DFM 82).
+
+Stage Summary:
+- Le moteur est passé d'« agent RL + routeur » à un ESSAIM : RL + ratchet AutoPCB + self-verifier Fuse + via_minimizer DeepPCB + firmware bridge Flux.ai + multiphysique AuraStack + génération NL Circuitron + copilote + serveur MCP.
+- Les audits déterministes ont servi immédiatement : 3 vrais défauts géométriques détectés puis corrigés à la source (bornes corps, headers au bord, keepout rotatif).
+- Tous les tests passent, TypeScript propre, MCP testé en live.
+
+
