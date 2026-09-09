@@ -21,8 +21,12 @@ import {
   FABRICS, checkManufacturability, buildPanel, offsetGerber, generatePanelPackage,
   type FabPreset,
 } from '../src/lib/engine/panelizer'
-import { calibrateThermalModel, calibratedDeltaT, impedanceProfile, truthSensitiveDeltaT } from '../src/lib/engine/calibration'
-import { buildEvalContext } from '../src/lib/engine/world-model'
+import {
+  calibrateThermalModel, calibratedDeltaT, impedanceProfile, truthSensitiveDeltaT,
+  calibrateFromMeasuredBoards, sensitiveDeltaTs, type MeasuredBoardSample,
+} from '../src/lib/engine/calibration'
+import { buildEvalContext, mulberry32 } from '../src/lib/engine/world-model'
+import type { PlacedComponent } from '../src/lib/engine/types'
 import { AMBIENT } from '../src/lib/engine/simulator'
 import { generateSpiceDeck } from '../src/lib/engine/spice'
 import { DEFAULT_RULES } from '../src/lib/engine/rules'
@@ -177,6 +181,7 @@ for (const nl of NETLISTS) {
 
   // ---- P2.3 — Calibration corrélation modèle latent ↔ simulation ----
   const cal = calibrateThermalModel(nl, plan, constraints, { samples: 12, seed: 7, anchor: placement.placements })
+  const rngFdm = mulberry32(7)  // même graine que le chemin FDM (tirages placements uniquement)
   assert(Number.isFinite(cal.r) && Math.abs(cal.r) <= 1, 'calibration : corrélation de Pearson bornée')
   assert(cal.r > 0.55, `calibration : corrélation latent ↔ ΔT sensibles r = ${cal.r.toFixed(3)} (${cal.samples + 1} échantillons+ancre, ΔT max carte r = ${cal.rMax.toFixed(2)} — métrique distincte)`)
   assert(cal.slope > 0, `calibration : pente ${cal.slope.toFixed(3)} °C/unité latente, intercept ${cal.intercept.toFixed(1)}`)
@@ -192,6 +197,58 @@ for (const nl of NETLISTS) {
   const zi = impedanceProfile(DEFAULT_RULES)
   assert(zi.length >= 7 && zi.every((z) => z.z0 > 0), `profil d'impédance : ${zi.length} classes (Z0 > 0)`)
   assert(Math.abs((zi.find((z) => z.cls === 'rf')?.z0 ?? 0) - 50) < 40, `RF 2,8 mm : Z0 ${(zi.find((z) => z.cls === 'rf')?.z0 ?? 0).toFixed(1)} Ω ≈ cible 50 Ω`)
+
+  // ---- P2.3 — Calage sur CARTES MESURÉES (harnais + validation sanitaire) ----
+  // Sanity mathématique : les relevés SYNTHÉTIQUES reproduisent EXACTEMENT les
+  // placements du chemin FDM (même graine, même formule, même ordre de tirage)
+  // afin que les deux régressions portent sur le même jeu — seule la vérité
+  // terrain diffère (FDM + bruit ±0,2 °C vs FDM pur). Ça valide la plomberie
+  // (alignement refs, régression, validation sanitaire), PAS la corrélation
+  // monde réel — celle-ci attend de vraies cartes instrumentées.
+  const synthBoards: MeasuredBoardSample[] = []
+  const noiseRng = mulberry32(999)  // graine séparée : ne décale pas les placements
+  // placements identiques au chemin FDM : ancre d'abord, puis 12 tirages seed 7
+  const replicateFdmSamples = (): PlacedComponent[] =>
+    nl.components.map((c) => ({
+      ref: c.ref,
+      x: 2 + c.footprint.w / 2 + rngFdm() * Math.max(0.1, nl.board.w - c.footprint.w - 4),
+      y: 2 + c.footprint.h / 2 + rngFdm() * Math.max(0.1, nl.board.h - c.footprint.h - 4),
+      rot: [0, 90, 180, 270][Math.floor(rngFdm() * 4)] as 0 | 90 | 180 | 270,
+      side: 'top' as const,
+      fixed: false,
+    }))
+  const anchorPerRef = sensitiveDeltaTs(ctxCal, nl, placement.placements)
+  synthBoards.push({
+    label: 'ancre — solution opérante',
+    ambientC: 22,
+    placements: placement.placements,
+    measurements: anchorPerRef.map((m) => ({ ref: m.ref, deltaT: m.deltaT })),
+    source: 'test — FDM + bruit ±0,2 °C (sanity plomberie)',
+  })
+  for (let i = 0; i < 12; i++) {
+    const pl = replicateFdmSamples()
+    const perRef = sensitiveDeltaTs(ctxCal, nl, pl)
+    synthBoards.push({
+      label: `synth-${i}`,
+      ambientC: 21 + noiseRng() * 6,
+      placements: pl,
+      measurements: perRef.map((m) => ({ ref: m.ref, deltaT: m.deltaT + (noiseRng() - 0.5) * 0.4 })),
+      source: 'test — FDM + bruit ±0,2 °C (sanity plomberie)',
+    })
+  }
+  // relevé volontairement invalide : capteur décollé (ΔT absurde) → écarté
+  synthBoards.push({
+    label: 'mesure capteur décollé',
+    ambientC: 22,
+    placements: ctxCal.sensitive.map((s) => ({ ref: s.ref, x: 10, y: 10, rot: 0 as const, side: 'top' as const, fixed: false })),
+    measurements: [{ ref: ctxCal.sensitive[0]?.ref ?? 'U1', deltaT: 341.7 }],
+    source: 'test — invalide',
+  })
+  const mcal = calibrateFromMeasuredBoards(nl, plan, constraints, synthBoards)
+  assert(mcal.usedSamples === 13 && mcal.skippedSamples === 1, `mesuré : ${mcal.usedSamples}/14 relevés exploités, ${mcal.skippedSamples} écarté(s) par validation sanitaire`)
+  assert(mcal.r > 0.5 && Math.abs(mcal.r - cal.r) < 0.1, `mesuré : corrélation r = ${mcal.r.toFixed(3)} ≈ r FDM ${cal.r.toFixed(3)} sur les mêmes placements (bruit ±0,2 °C)`)
+  assert(mcal.slope > 0 && Math.abs(mcal.slope - cal.slope) / cal.slope < 0.15, `mesuré : pente ${mcal.slope.toFixed(3)} ≈ pente FDM ${cal.slope.toFixed(3)} °C/u (mêmes placements, ±15 %)`)
+  assert(mcal.matchedRefs.length > 0 && mcal.sources.length === 1, `mesuré : ${mcal.matchedRefs.length} refs sensibles couvertes, provenance tracée`)
 
   // ---- P2.4 — SPICE : corrélation circuit avec parasitique de routage ----
   const spice = generateSpiceDeck(nl, routing)

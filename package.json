@@ -16,7 +16,9 @@
     "test:e2e": "bun run scripts/e2e-resolutions.ts",
     "setup:hooks": "git config core.hooksPath scripts/hooks",
     "db:pg": "bash scripts/use-db.sh postgres",
-    "db:sqlite": "bash scripts/use-db.sh sqlite"
+    "db:sqlite": "bash scripts/use-db.sh sqlite",
+    "pg:start": "bash scripts/pg-lifecycle.sh start",
+    "test:pg": "DATABASE_URL=postgresql://nexus@127.0.0.1:5433/nexus bun run scripts/pg_persistence_test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

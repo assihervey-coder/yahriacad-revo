@@ -17,6 +17,38 @@ import type { AgentPlan, Constraint, DesignRules, Netlist, PlacedComponent } fro
 import { buildEvalContext, mulberry32, predictThermal, type EvalContext } from './world-model'
 import { microstripZ0, solveThermal, AMBIENT } from './simulator'
 
+/* ====================== Régression linéaire partagée ====================== */
+
+/** Régression moindres carrés y = a·x + b + Pearson r (outil commun des deux
+ *  harnais de calibration : simulation et cartes mesurées). */
+export function linregStats(arr: { a: number; b: number }[]): {
+  r: number
+  slope: number
+  intercept: number
+  rmse: number
+  maxErr: number
+} {
+  const n = arr.length
+  const ma = arr.reduce((s, p) => s + p.a, 0) / n
+  const mb = arr.reduce((s, p) => s + p.b, 0) / n
+  let cov = 0, va = 0, vb = 0
+  for (const p of arr) {
+    cov += (p.a - ma) * (p.b - mb)
+    va += (p.a - ma) ** 2
+    vb += (p.b - mb) ** 2
+  }
+  const r = va > 0 && vb > 0 ? cov / Math.sqrt(va * vb) : 0
+  const slope = va > 0 ? cov / va : 0
+  const intercept = mb - slope * ma
+  let se = 0, maxE = 0
+  for (const p of arr) {
+    const e = slope * p.a + intercept - p.b
+    se += e * e
+    maxE = Math.max(maxE, Math.abs(e))
+  }
+  return { r, slope, intercept, rmse: Math.sqrt(se / n), maxErr: maxE }
+}
+
 export interface ThermalCalibration {
   samples: number
   /** Corrélation de Pearson : chaleur latente ↔ ΔT moyen aux composants sensibles (0..1 attendu) */
@@ -47,25 +79,36 @@ function randomPlacement(nl: Netlist, rng: () => number, ref: string): PlacedCom
   return { ref, x, y, rot, side: 'top', fixed: false }
 }
 
-/** Vérité terrain du noyau latent : ΔT moyen (°C) lu dans le champ FDM aux
+/** Vérité terrain du noyau latent : ΔT (°C) lu dans le champ FDM aux
  *  composants SENSIBLES — c'est exactement ce que prédit predictThermal
- *  (« chaleur perçue »). Le ΔT max carte est une métrique différente. */
-export function truthSensitiveDeltaT(
+ *  (« chaleur perçue »). Le ΔT max carte est une métrique différente.
+ *  Réutilisable pour aligner un relevé d'instrumentation réel (thermocouples,
+ *  caméra thermique) sur les mêmes refs que le modèle. */
+export function sensitiveDeltaTs(
   ctx: EvalContext,
   nl: Netlist,
   placements: PlacedComponent[],
-): number {
+): { ref: string; deltaT: number }[] {
   const tm = solveThermal(nl, placements)
   const at = (x: number, y: number) =>
     tm.temps[
       Math.min(tm.rows - 1, Math.max(0, Math.round(y / tm.cell))) * tm.cols +
       Math.min(tm.cols - 1, Math.max(0, Math.round(x / tm.cell)))
     ]
-  const vals = ctx.sensitive.map((s) => {
+  return ctx.sensitive.map((s) => {
     const p = placements.find((q) => q.ref === s.ref)
-    return p ? at(p.x, p.y) - AMBIENT : 0
+    return { ref: s.ref, deltaT: p ? at(p.x, p.y) - AMBIENT : 0 }
   })
-  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
+}
+
+/** ΔT moyen (°C) aux composants sensibles — vérité terrain FDM du noyau latent. */
+export function truthSensitiveDeltaT(
+  ctx: EvalContext,
+  nl: Netlist,
+  placements: PlacedComponent[],
+): number {
+  const vals = sensitiveDeltaTs(ctx, nl, placements)
+  return vals.length ? vals.reduce((a, b) => a + b.deltaT, 0) / vals.length : 0
 }
 
 /** Mesure r et droite de calibration sur N échantillons aléatoires. */
@@ -95,30 +138,8 @@ export function calibrateThermalModel(
     push(nl.components.map((c) => randomPlacement(nl, rng, c.ref)))
   }
 
-  const stats = (arr: { a: number; b: number }[]) => {
-    const n = arr.length
-    const ma = arr.reduce((s, p) => s + p.a, 0) / n
-    const mb = arr.reduce((s, p) => s + p.b, 0) / n
-    let cov = 0, va = 0, vb = 0
-    for (const p of arr) {
-      cov += (p.a - ma) * (p.b - mb)
-      va += (p.a - ma) ** 2
-      vb += (p.b - mb) ** 2
-    }
-    const r = va > 0 && vb > 0 ? cov / Math.sqrt(va * vb) : 0
-    const slope = va > 0 ? cov / va : 0
-    const intercept = mb - slope * ma
-    let se = 0, maxE = 0
-    for (const p of arr) {
-      const e = slope * p.a + intercept - p.b
-      se += e * e
-      maxE = Math.max(maxE, Math.abs(e))
-    }
-    return { r, slope, intercept, rmse: Math.sqrt(se / n), maxErr: maxE }
-  }
-
-  const s = stats(pairs.map((p) => ({ a: p.pred, b: p.truth })))
-  const sMax = stats(maxPairs.map((p) => ({ a: p.pred, b: p.truthMax })))
+  const s = linregStats(pairs.map((p) => ({ a: p.pred, b: p.truth })))
+  const sMax = linregStats(maxPairs.map((p) => ({ a: p.pred, b: p.truthMax })))
 
   return {
     samples: N,
@@ -143,6 +164,143 @@ export function calibratedDeltaT(
   placements: Map<string, PlacedComponent>,
 ): number {
   return Math.max(0, cal.slope * predictThermal(ctx, placements) + cal.intercept)
+}
+
+/* ================== Calibration sur cartes MESURÉES (P2.3) ================== */
+
+/** Un relevé réel : une carte instrumentée, une configuration thermique.
+ *  positions = placement RÉEL de la carte (AOI, rayons X, fichier pick&place
+ *  de production) ; measurements = ΔT mesuré par capteur (thermocouple,
+ *  caméra IR) sur chaque composant sensible, RELATIF à ambientC. */
+export interface MeasuredBoardSample {
+  /** identifiant traçable : « révision B — lot 2026-08 » */
+  label: string
+  /** température ambiante de la mesure (°C) — le ΔT est relatif à cette base */
+  ambientC: number
+  /** placement réel des composants (mm, même convention que le studio) */
+  placements: PlacedComponent[]
+  /** ΔT mesuré (°C) par composant — seuls les refs sensibles comptent */
+  measurements: { ref: string; deltaT: number }[]
+  /** provenance : banc d'essai, campagne, opérateur… (versionnage) */
+  source?: string
+}
+
+export interface MeasuredCalibration {
+  /** relevés soumis */
+  samples: number
+  /** relevés exploitables (≥ 2 mesures sur refs sensibles, valeurs saines) */
+  usedSamples: number
+  /** relevés écartés par la validation sanitaire */
+  skippedSamples: number
+  /** refs sensibles couvertes par les mesures / manquantes */
+  matchedRefs: string[]
+  missingRefs: string[]
+  r: number
+  /** °C par unité de chaleur latente — LE coefficient de calage */
+  slope: number
+  intercept: number
+  rmse: number
+  maxErr: number
+  predMin: number
+  predMax: number
+  truthMin: number
+  truthMax: number
+  /** plage d'ambiance couverte par les relevés (°C) */
+  ambientMinC: number
+  ambientMaxC: number
+  /** provenances déclarées (traçabilité des coefficients) */
+  sources: string[]
+  at: string
+}
+
+/** Bornes de plausibilité des mesures réelles (°C) — garde-fou entrée.
+ *  ΔT absurde (capteur décollé, réflexion IR) → relevé écarté, jamais moyenné. */
+const DT_MIN = -10
+const DT_MAX = 200
+const AMBIENT_MIN = -40
+const AMBIENT_MAX = 125
+
+/** Calage des coefficients du noyau latent sur des CARTES MESURÉES.
+ *  Même mathématique que calibrateThermalModel, mais la vérité terrain vient
+ *  de l'instrumentation réelle au lieu du solveur FDM. Un relevé est
+ *  exploitable dès 1 mesure saine sur une ref sensible ; le calage lui-même
+ *  exige ≥ 2 relevés (régression). Les relevés invalides sont écartés
+ *  (comptés), jamais interpolés ni moyennés en silence. */
+export function calibrateFromMeasuredBoards(
+  nl: Netlist,
+  plan: AgentPlan,
+  constraints: Constraint[],
+  samples: MeasuredBoardSample[],
+): MeasuredCalibration {
+  const ctx = buildEvalContext(nl, plan, constraints)
+  const sensitiveRefs = ctx.sensitive.map((s) => s.ref)
+  const sensSet = new Set(sensitiveRefs)
+
+  const pairs: { pred: number; truth: number }[] = []
+  const matched = new Set<string>()
+  const sources = new Set<string>()
+  let skipped = 0
+  let ambMin = Infinity
+  let ambMax = -Infinity
+
+  for (const smp of samples) {
+    // validation sanitaire du relevé
+    const ambOk = Number.isFinite(smp.ambientC) && smp.ambientC >= AMBIENT_MIN && smp.ambientC <= AMBIENT_MAX
+    const usable = ambOk
+      ? smp.measurements.filter(
+          (m) =>
+            sensSet.has(m.ref) &&
+            Number.isFinite(m.deltaT) &&
+            m.deltaT >= DT_MIN &&
+            m.deltaT <= DT_MAX,
+        )
+      : []
+    const placementsOk =
+      smp.placements.length > 0 &&
+      smp.placements.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && nl.components.some((c) => c.ref === p.ref))
+    if (!ambOk || usable.length < 1 || !placementsOk) {
+      skipped++
+      continue
+    }
+    const map = new Map(smp.placements.map((p) => [p.ref, p]))
+    const pred = predictThermal(ctx, map)
+    const truth = usable.reduce((acc, m) => acc + m.deltaT, 0) / usable.length
+    if (!Number.isFinite(pred) || !Number.isFinite(truth)) {
+      skipped++
+      continue
+    }
+    for (const m of usable) matched.add(m.ref)
+    if (smp.source) sources.add(smp.source)
+    ambMin = Math.min(ambMin, smp.ambientC)
+    ambMax = Math.max(ambMax, smp.ambientC)
+    pairs.push({ pred, truth })
+  }
+
+  const fit =
+    pairs.length >= 2
+      ? linregStats(pairs.map((p) => ({ a: p.pred, b: p.truth })))
+      : { r: 0, slope: 0, intercept: 0, rmse: 0, maxErr: 0 }
+
+  return {
+    samples: samples.length,
+    usedSamples: pairs.length,
+    skippedSamples: skipped,
+    matchedRefs: sensitiveRefs.filter((r) => matched.has(r)),
+    missingRefs: sensitiveRefs.filter((r) => !matched.has(r)),
+    r: fit.r,
+    slope: fit.slope,
+    intercept: fit.intercept,
+    rmse: fit.rmse,
+    maxErr: fit.maxErr,
+    predMin: pairs.length ? Math.min(...pairs.map((p) => p.pred)) : 0,
+    predMax: pairs.length ? Math.max(...pairs.map((p) => p.pred)) : 0,
+    truthMin: pairs.length ? Math.min(...pairs.map((p) => p.truth)) : 0,
+    truthMax: pairs.length ? Math.max(...pairs.map((p) => p.truth)) : 0,
+    ambientMinC: pairs.length ? ambMin : 0,
+    ambientMaxC: pairs.length ? ambMax : 0,
+    sources: [...sources],
+    at: new Date().toISOString(),
+  }
 }
 
 /* ====================== Profil d'impédance par classe ====================== */
