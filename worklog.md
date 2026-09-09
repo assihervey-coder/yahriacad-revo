@@ -415,3 +415,19 @@ Work Log:
 
 Stage Summary:
 - La feuille de route d'audit 12/12 est confirmée solide en conditions réelles après re-validation complète ; origin/main à jour (60d5bce), arbre propre. Projet NEXUS PCB : audit intégralement soldé.
+
+---
+Task ID: 20
+Agent: Super Z (agent principal)
+Task: ① Registre de risques à jour dans l'audit V4 PDF (P1.3-P2.4 → Soldé) ; ② prototype PostgreSQL réel ; ③ harnais de calage P2.3 sur cartes mesurées ; landings marketeurs + décideurs actualisées ; commit + push.
+
+Work Log:
+- ② PostgreSQL réel : binaires officielles PG 18.4 via @embedded-postgres/linux-x64 (scripts/pgembed, sans root) ; scripts/pg-lifecycle.sh (start/stop/status, port 5433, base nexus) ; bascule scripts/use-db.sh postgres + db push OK ; scripts/pg_persistence_test.ts — 10/10 (moteur vérifié « PostgreSQL 18.4 », tables, Run↔Project, journal multi-acteurs alice+bob, 10 écritures concurrentes, cascade) ; persistance applicative prouvée (POST /api/edits sur serveur PG → kill -9 → redémarrage → relecture OK, incident EADDRINUSE zombie résolu par pkill arbre complet) ; réversibilité prouvée (retour SQLite, données d'origine rendues) ; npm scripts pg:start / test:pg.
+- ③ Calage sur cartes mesurées : calibration.ts — linregStats factorisée, sensitiveDeltaTs exporté, calibrateFromMeasuredBoards (validation sanitaire : ambiance -40..125 °C, ΔT -10..200 °C, refs inconnues et placements invalides écartés et comptés, jamais moyennés) ; scripts/calibrate_measured.ts (CLI : --project/--data/--out, refuse < 2 relevés exploitables — aucun calage silencieux) ; scripts/measured-boards.example.json (gabarit : 1 relevé valide + 1 invalide volontaire → démontre le refus) ; test-engine : 12 assertions nouvelles × 3 projets — les relevés synthétiques répliquent EXACTEMENT les placements du chemin FDM (même graine 7, même formule, ordre de tirage) → pente restituée à 0,2 % près (0,896 vs 0,898), r à 0,002 près, relevé invalide écarté.
+- Audit V4 PDF : audit_content_v4.py réécrit (révision eefde6e) — registre 12/12 « Soldé » avec preuves exécutables, score 93→97, 269 vérifications (226 moteur + 33 E2E + 10 PG), grille de complétude resserrée (écart max-min 24→7 pts), table architecture +4 modules (panelizer/odb/calibration/spice, 20 modules 5 722 lignes), chapitre 8 → phase suivante (preuve physique, collaboration opérée, robustesse), limites honnêtes (coefficients industriels en attente de cartes réelles) ; charts (domaines %, donut 12/12) ; cover (12/12, eefde6e) ; pdf_qa PASS 14 pages.
+- Landing décideurs : stat « 3 sprints »→« 12/12 ITEMS SOLLÉS », hero trajectoire « TROIS SPRINTS VERS L'INDUSTRIE », 4 étapes réécrites (preuve physique / collaboration opérée / robustesse routeur / échanges 3D), encadré « Douze items soldés » ; CORRECTIONS de défauts préexistants : stat 118→269 déplacé en colonne droite (chevauchement avec le paragraphe), phrase redondante retirée (débordement sur page 5), nbsp fautive supprimée (« contr actuelle ») ; 6 pages nettes.
+- Landing marketeurs : 118→269 contrôles ; aucun autre contenu périmé (scan exhaustif) ; 6 pages.
+- Vérifications : tsc 0 erreur ; suite moteur TOUS LES TESTS PASSENT (226 assertions) ; protocole PG 10/10 ; QA pdf PASS (audit) ; contrôle visuel pixel page par page des 3 PDF.
+
+Stage Summary:
+- Le registre de risques V4 est intégralement « Soldé » sur preuves exécutables ; la persistance PostgreSQL est validée sur instance réelle et réversible ; le calage industriel n'attend que les relevés de vraies cartes (harnais + format + CLI livrés). Les 3 PDF (audit 14 p. + 2 landings 6 p.) régénérés et à jour.

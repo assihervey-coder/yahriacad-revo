@@ -33,12 +33,12 @@ def strip_axes(ax):
 
 # ── Figure 1 — Complétude par domaine (barres horizontales) ────────────
 domaines = [
-    ('Persistance et traçabilité', 76),
-    ('Export et fabrication', 85),
-    ('Analyse SI / thermique', 88),
-    ('Vérification DRC / DFM', 92),
-    ('Interface studio', 95),
+    ('Persistance et traçabilité', 93),
+    ('Analyse SI / thermique', 94),
+    ('Vérification DRC / DFM', 95),
+    ('Interface studio', 96),
     ('Routage multicouche', 98),
+    ('Export et fabrication', 97),
     ('Placement et optimisation', 100),
 ]
 labels = [d[0] for d in domaines]
@@ -87,15 +87,15 @@ fig.savefig(f'{OUT}/chart_projets_v4.png', dpi=200, facecolor='white')
 plt.close(fig)
 
 # ── Figure 3 — Registre de risques (donut, légende riche) ──────────────
-parts = [6, 1, 5]
-part_labels = ['Fermés avec preuve de commit', 'Partiel (export livré, import manquant)', 'Ouverts, non entamés']
-colors_ = [DEEP, LIGHT, PALE]
+parts = [12]
+part_labels = ['Soldés avec preuve de commit et mesure reproductible']
+colors_ = [DEEP]
 
 fig, ax = plt.subplots(figsize=(8.2, 3.7), constrained_layout=True)
 wedges, _ = ax.pie(parts, colors=colors_, startangle=90, counterclock=False,
                    wedgeprops=dict(width=0.34, edgecolor='white', linewidth=2))
 ax.text(0, 0.06, '12', ha='center', va='center', fontsize=30, color=TEXT, fontweight='bold')
-ax.text(0, -0.24, 'items suivis', ha='center', va='center', fontsize=10.5, color=MUTED)
+ax.text(0, -0.24, 'items soldés', ha='center', va='center', fontsize=10.5, color=MUTED)
 legend_labels = [f'{l} — {v}' for l, v in zip(part_labels, parts)]
 leg = ax.legend(wedges, legend_labels, loc='center left', bbox_to_anchor=(1.02, 0.5),
                 frameon=False, fontsize=10.5, labelspacing=1.1, handlelength=1.0)

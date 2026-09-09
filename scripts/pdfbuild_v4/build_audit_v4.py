@@ -253,7 +253,7 @@ story.append(body(C.CH3_P1))
 story.append(Spacer(1, 8))
 story.append(make_table(C.CH3_TABLE_HEAD, C.CH3_TABLE, [0.22, 0.66, 0.12], center_cols=(2,)))
 story.append(Spacer(1, 6))
-story.append(Paragraph('Tableau 1 — Modules du moteur et de la plateforme audités (16 modules, 4 450 lignes)', S['caption']))
+story.append(Paragraph('Tableau 1 — Modules du moteur et de la plateforme audités (20 modules, 5 722 lignes)', S['caption']))
 story.append(Spacer(1, 14))
 story.append(body(C.CH3_P2))
 

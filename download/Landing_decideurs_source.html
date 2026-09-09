@@ -2896,8 +2896,8 @@ html, body { width: 794px; min-height: 1123px; }
 </div>
       <div class="grid-item" style="grid-area: 7 / 7 / 13 / 13; align-items: start; justify-content: start;">
 <div class="stat-block">
-            <div><span class="stat-num">3</span><span class="stat-unit">sprints</span></div>
-            <span class="stat-label">POUR FERMER LES SIX CHANTIERS RESTANTS</span>
+            <div><span class="stat-num">12</span><span class="stat-unit">/ 12</span></div>
+            <span class="stat-label">ITEMS DU REGISTRE D'AUDIT SOLLÉS — PREUVE DE COMMIT ET MESURE</span>
         </div>
 </div>
     </div>
@@ -5349,12 +5349,12 @@ html, body { width: 794px; min-height: 1123px; }
     <div class="safe-zone" style="gap: 16px; inset: 8% 10%;">
       <div class="grid-item" style="grid-area: 1 / 1 / 10 / 7; align-items: stretch; justify-content: start;">
 <div class="glass-canvas" style="width:100%; min-height:100%; box-sizing:border-box;"><h3 style="font-size:16px;font-weight:700;margin:20px 0 8px 0;color:var(--c-accent);text-transform:uppercase;letter-spacing:0.05em;">Une qualité qui bloque, pas qui promet</h3>
-<p style="margin:0 0 12px 0;line-height:1.7">La crédibilité d'un outil d'ingénierie se juge à sa discipline interne. Chez NEXUS PCB, elle est mécanique : aucun push ne passe sans la suite moteur complète, sans le smoke test du flux temps réel, sans la vérification TypeScript stricte et sans l'E2E navigateur sur trois résolutions. Une régression devient un échec visible, pas une note de bas de page. Cette exigence est documentée, committée et rejouable par un tiers — c'est l'auditabilité qui transforme une promesse de fiabilité en caractéristique&nbsp;contractuelle.</p></div>
+<p style="margin:0 0 12px 0;line-height:1.7">La crédibilité d'un outil d'ingénierie se juge à sa discipline interne. Chez NEXUS PCB, elle est mécanique : aucun push ne passe sans la suite moteur complète, sans le smoke test du flux temps réel, sans la vérification TypeScript stricte ni sans l'E2E navigateur trirésolution.  Cette exigence est documentée, committée et rejouable par un tiers — l'auditabilité transforme une promesse de fiabilité en caractéristique contractuelle.</p></div>
 </div>
-      <div class="grid-item" style="grid-area: 10 / 1 / 13 / 7; align-items: start; justify-content: start;">
+      <div class="grid-item" style="grid-area: 10 / 7 / 13 / 13; align-items: start; justify-content: start;">
 <div class="stat-block">
-            <div><span class="stat-num">118</span><span class="stat-unit">contrôles</span></div>
-            <span class="stat-label">MOTEUR + E2E, BLOQUANTS À CHAQUE PUSH</span>
+            <div><span class="stat-num">269</span><span class="stat-unit">contrôles</span></div>
+            <span class="stat-label">MOTEUR + E2E + POSTGRESQL, BLOQUANTS À CHAQUE PUSH</span>
         </div>
 </div>
       <div class="grid-item" style="grid-area: 1 / 7 / 13 / 13; align-items: start; justify-content: start;">
@@ -6568,18 +6568,17 @@ html, body { width: 794px; min-height: 1123px; }
 </svg></div>
     <div class="safe-zone" style="gap: 16px; inset: 8% 10%;">
       <div class="grid-item" style="grid-area: 1 / 1 / 3 / 13; align-items: start; justify-content: start;">
-<h1 class="hero-type weight-thin" style="font-size: var(--text-scale-4)">UNE FEUILLE<br>DE ROUTE<br>COURTE.</h1>
+<h1 class="hero-type weight-thin" style="font-size: var(--text-scale-4)">TROIS SPRINTS<br>VERS<br>L'INDUSTRIE.</h1>
 </div>
       <div class="grid-item" style="grid-area: 3 / 1 / 9 / 13; align-items: stretch; justify-content: start;">
-<div class="process-list-container"><ul class="process-list"><li class="process-step"><span class="step-num">1</span><div><div class="step-title">Comparaison de runs</div><div class="step-desc">Deltas de DFM, de vias et de longueur dans l'historique — la boucle d'amélioration devient lisible.</div></div></li>
-<li class="process-step"><span class="step-num">2</span><div><div class="step-title">Session portable</div><div class="step-desc">Import du JSON de replay : une démonstration rejouée à l'identique, machine différente.</div></div></li>
-<li class="process-step"><span class="step-num">3</span><div><div class="step-title">ODB++ et Gerber X2</div><div class="step-desc">Les formats d'échange des flux industriels, aux côtés du RS-274X déjà livré.</div></div></li>
-<li class="process-step"><span class="step-num">4</span><div><div class="step-title">Équipe et preuve</div><div class="step-desc">Persistance Postgres à rôles, journal d'éditions, corrélation des modèles sur cartes mesurées.</div></div></li>
-</ul></div>
+<div class="process-list-container"><ul class="process-list"><li class="process-step"><span class="step-num">1</span><div><div class="step-title">Preuve physique</div><div class="step-desc">Caler les constantes sur de vraies cartes instrumentées — le harnais d'acquisition et le format de relevés sont déjà livrés.</div></div></li>
+<li class="process-step"><span class="step-num">2</span><div><div class="step-title">Collaboration opérée</div><div class="step-desc">PostgreSQL validé sur instance réelle (protocole 10/10, réversible) ; reste à déployer en réseau avec authentification et rôles.</div></div></li>
+<li class="process-step"><span class="step-num">3</span><div><div class="step-title">Robustesse du routeur</div><div class="step-desc">Réduire les nets résiduels sur les cartes denses — rip-up étendu, paire de couches paramétrable, sans régression.</div></div></li>
+<li class="process-step"><span class="step-num">4</span><div><div class="step-title">Échanges 3D</div><div class="step-desc">Sélection multiple et export STEP des positions pour l'intégration mécanique.</div></div></li></ul></div>
 </div>
       <div class="grid-item" style="grid-area: 9 / 1 / 13 / 13; align-items: stretch; justify-content: start;">
-<div class="glass-canvas" style="width:100%; min-height:100%; box-sizing:border-box;"><h3 style="font-size:16px;font-weight:700;margin:20px 0 8px 0;color:var(--c-accent);text-transform:uppercase;letter-spacing:0.05em;">Six chantiers, trois sprints</h3>
-<p style="margin:0 0 12px 0;line-height:1.7">Chaque étape ci-dessus porte un critère d'achèvement mesurable, vérifiable par la suite de tests ou par un artefact d'export. L'ordre est choisi pour protéger la crédibilité acquise : valeur immédiate, formats industriels, puis preuve physique et collaboration&nbsp;d'équipe.</p></div>
+<div class="glass-canvas" style="width:100%; min-height:100%; box-sizing:border-box;"><h3 style="font-size:16px;font-weight:700;margin:20px 0 8px 0;color:var(--c-accent);text-transform:uppercase;letter-spacing:0.05em;">Douze items soldés, trois sprints ouverts</h3>
+<p style="margin:0 0 12px 0;line-height:1.7">La feuille de route d'audit d'origine est intégralement close : douze items sur douze fermés avec preuve de commit et mesure reproductible — de la comparaison de runs à la persistance PostgreSQL validée sur instance réelle. La trajectoire ci-dessus ouvre la phase suivante. Chaque étape garde son critère d'achèvement mesurable, vérifiable par la suite de tests ou par un artefact d'export.</p></div>
 </div>
     </div>
   </div>
