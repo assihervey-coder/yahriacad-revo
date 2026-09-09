@@ -6,6 +6,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireRole } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
   try {
@@ -23,10 +24,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  // [M4] écriture du journal = geste d'ingénierie — le lecteur est refusé
+  const gate = await requireRole('ingenieur')
+  if (gate.denied) return NextResponse.json({ error: gate.denied.message }, { status: gate.denied.status })
   try {
     const body = (await req.json()) as {
       netlistId?: string
-      actor?: string
       kind?: string
       ref?: string
       from?: { x?: number; y?: number; rot?: number }
@@ -42,10 +45,12 @@ export async function POST(req: NextRequest) {
       project = await db.project.create({ data: { netlistId: body.netlistId, name: body.netlistId } })
     }
 
+    // [M4] l'auteur est l'acteur DE SESSION (fait foi) — chaque geste du
+    // journal est attribué à son auteur réel, le body ne peut pas usurper.
     const edit = await db.editEvent.create({
       data: {
         projectId: project.id,
-        actor: body.actor ?? 'local',
+        actor: `${gate.actor.name} (${gate.actor.role})`,
         kind: body.kind,
         ref: body.ref,
         xFrom: body.from?.x ?? 0,

@@ -39,6 +39,19 @@ model EditEvent {
   createdAt DateTime @default(now())
 }
 
+/// Utilisateur applicatif [Sprint 2 — M4] — authentification + rôles.
+/// role = "admin" | "ingenieur" | "lecteur" (String porté par l'app :
+/// Prisma n'accepte pas les enums sur SQLite — la réversibilité provider
+/// de M3 doit être préservée ; la validation du rôle est faite dans
+/// src/lib/auth.ts).
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  role      String   @default("lecteur")
+  createdAt DateTime @default(now())
+}
+
 /// Exécution du pipeline de conception autonome
 model Run {
   id             String   @id @default(cuid())

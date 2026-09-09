@@ -204,7 +204,20 @@ function logEdit(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ netlistId: s.netlistId, kind, ref, from, to, meta }),
   })
-    .then(() => s.loadEditLog())
+    .then(async (res) => {
+      // [M4] refus serveur (lecteur / non connecté) → visible dans la console
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string }
+        useStudio.setState((st) => ({
+          logs: [
+            ...st.logs,
+            { ts: Date.now(), stage: 'system', level: 'warn', msg: `[JOURNAL REFUSÉ ${res.status}] ${data.error ?? 'geste non journalisé'}` },
+          ],
+        }))
+        return
+      }
+      await s.loadEditLog()
+    })
     .catch(() => undefined)
 }
 

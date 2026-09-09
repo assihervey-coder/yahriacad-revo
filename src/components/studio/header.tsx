@@ -1,10 +1,10 @@
 'use client'
 /**
  * NEXUS PCB — En-tête du studio : identité, sélection projet, générateur IA
- * [Circuitron nl_to_skidl], contrôle du pipeline
+ * [Circuitron nl_to_skidl], contrôle du pipeline + compte applicatif [M4]
  */
-import { useState } from 'react'
-import { Cpu, Loader2, Play, Radio, Sparkles, Square } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Cpu, Loader2, Play, Radio, ShieldCheck, Sparkles, Square, UserRound } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 import { NETLISTS } from '@/lib/engine/netlists'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -41,6 +41,40 @@ export function StudioHeader() {
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+
+  // --- Compte applicatif + rôles [Sprint 2 M4] ---
+  interface Account { id: string; email: string; name: string; role: string }
+  const [actor, setActor] = useState<{ name: string; role: string } | null>(null)
+  const [accounts, setAccounts] = useState<Account[]>([])
+  useEffect(() => {
+    fetch('/api/auth/me').then((r) => r.json()).then((d: { actor: { name: string; role: string } | null }) => setActor(d.actor)).catch(() => undefined)
+    fetch('/api/users').then((r) => r.json()).then((d: { users: Account[] }) => setAccounts(d.users ?? [])).catch(() => undefined)
+  }, [])
+  const switchAccount = async (email: string) => {
+    if (!email) {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      setActor(null)
+      log('system', 'info', '[SESSION] Déconnexion — mode lecture anonyme (écritures refusées)')
+      return
+    }
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    })
+    const d = (await res.json()) as { user?: { name: string; role: string }; error?: string }
+    if (res.ok && d.user) {
+      setActor({ name: d.user.name, role: d.user.role })
+      log('system', 'info', `[SESSION] Compte actif : ${d.user.name} (${d.user.role}) — les gestes sont journalisés à son nom`)
+    } else {
+      log('system', 'warn', `[SESSION] Connexion refusée : ${d.error ?? res.status}`)
+    }
+  }
+  const ROLE_STYLE: Record<string, string> = {
+    admin: 'border-violet-700/70 bg-violet-950/40 text-violet-300',
+    ingenieur: 'border-cyan-700/70 bg-cyan-950/40 text-cyan-300',
+    lecteur: 'border-neutral-700 bg-black/40 text-neutral-400',
+  }
 
   const all = [...NETLISTS, ...customNetlists]
   const nl = all.find((n) => n.id === netlistId) ?? NETLISTS[0]
@@ -144,6 +178,45 @@ export function StudioHeader() {
             <SelectItem value="4" className="text-[11px]">4 couches</SelectItem>
           </SelectContent>
         </Select>
+      </div>
+
+      {/* ---------- Compte applicatif + rôle [M4] ---------- */}
+      <div className="flex items-center gap-1.5">
+        <UserRound className="h-3.5 w-3.5 text-emerald-700" />
+        <Select
+          value={accounts.find((a) => a.name === actor?.name)?.email ?? 'none'}
+          onValueChange={(v) => void switchAccount(v)}
+          disabled={running}
+        >
+          <SelectTrigger
+            className="h-8 w-[190px] border-emerald-900/60 bg-black/40 text-[11px] text-emerald-100"
+            aria-label="Compte actif"
+            title="Authentification applicative [M4] — admin · ingénieur · lecteur"
+          >
+            <SelectValue placeholder="Non connecté" />
+          </SelectTrigger>
+          <SelectContent className="border-emerald-900 bg-[#0a130d] text-emerald-100">
+            <SelectItem value="none" className="text-[11px] text-neutral-400">Non connecté (lecture seule)</SelectItem>
+            {accounts.map((a) => (
+              <SelectItem key={a.id} value={a.email} className="text-[11px]">
+                {a.name} — {a.role}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {actor ? (
+          <span
+            data-testid="role-badge"
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${ROLE_STYLE[actor.role] ?? ROLE_STYLE.lecteur}`}
+          >
+            <ShieldCheck className="mr-1 inline h-3 w-3" />
+            {actor.role}
+          </span>
+        ) : (
+          <span data-testid="role-badge" className="rounded-full border border-neutral-800 bg-black/40 px-2 py-0.5 text-[10px] text-neutral-500">
+            lecture seule
+          </span>
+        )}
       </div>
 
       <div className="ml-auto flex items-center gap-2.5">

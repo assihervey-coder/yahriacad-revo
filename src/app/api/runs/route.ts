@@ -4,6 +4,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireRole } from '@/lib/auth'
 
 export async function GET(req: NextRequest) {
   try {
@@ -21,6 +22,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  // [M4] action d'ingénierie — lecteur et non-authentifiés refusés
+  const gate = await requireRole('ingenieur')
+  if (gate.denied) return NextResponse.json({ error: gate.denied.message }, { status: gate.denied.status })
   try {
     const body = (await req.json()) as {
       netlistId?: string
