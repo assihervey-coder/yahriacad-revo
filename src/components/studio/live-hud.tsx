@@ -6,9 +6,11 @@
  * phase du moteur, progression net par net, net courant,
  * compteur de traces, vitesse réglable en plein vol, interruption.
  * Hors flux : barre « replay » pour rejouer la dernière session enregistrée
- * [DeepPCB ×2] — même moteur de lecture, même tempo réglable, zéro serveur.
+ * [DeepPCB ×2] — même moteur de lecture, même tempo réglable, zéro serveur,
+ * et TIMELINE seekable : scrub, avance, recul, pause — dans la session.
  */
-import { RotateCcw, Square } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Pause, Play, RotateCcw, SkipBack, SkipForward, Square } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 
 const PHASE_LABEL: Record<string, string> = {
@@ -49,6 +51,82 @@ function SpeedSelector({ liveSpeed, setLiveSpeed }: { liveSpeed: number; setLive
   )
 }
 
+/** Timeline seekable du replay : scrub au slider + transport (début, recul,
+ *  pause/lecture, avance, fin). Le scrub est débouné — chaque seek reconstruit
+ *  instantanément l'état de la session à l'instant visé. Depuis le repos, un
+ *  scrub ouvre la session en pause ; ▶ lit, ⏸ fige, à n'importe quel instant. */
+function ReplayTimeline() {
+  const replayPos = useStudio((s) => s.replayPos)
+  const replayTotal = useStudio((s) => s.replayTotal)
+  const replayPaused = useStudio((s) => s.replayPaused)
+  const seekReplay = useStudio((s) => s.seekReplay)
+  const pauseReplay = useStudio((s) => s.pauseReplay)
+  const resumeReplay = useStudio((s) => s.resumeReplay)
+  const replayLastRouting = useStudio((s) => s.replayLastRouting)
+  const liveActive = useStudio((s) => s.liveRouting.active)
+  const [local, setLocal] = useState<number | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+  if (replayTotal === 0) return null
+  const value = local ?? replayPos
+  const step = Math.max(1, Math.round(replayTotal / 50))
+  const onScrub = (v: number) => {
+    const clamped = Math.max(0, Math.min(replayTotal, Math.round(v)))
+    setLocal(clamped)
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => {
+      seekReplay(clamped)
+      setLocal(null)
+    }, 90)
+  }
+  const transportCls = 'rounded border border-neutral-700 bg-black/50 p-1 text-neutral-300 transition-colors hover:bg-sky-900/40 hover:text-sky-200 disabled:opacity-30'
+  const onPlayPause = () => {
+    if (!liveActive) replayLastRouting() // depuis le repos : lire depuis le début
+    else if (replayPaused) resumeReplay()
+    else pauseReplay()
+  }
+  return (
+    <div className="mt-2 border-t border-sky-900/40 pt-2">
+      <div className="flex items-center gap-1" data-testid="replay-timeline">
+        <button className={transportCls} title="Retour au début de la session" onClick={() => onScrub(0)}>
+          <SkipBack className="h-3 w-3" />
+        </button>
+        <button className={transportCls} title={`Reculer (${step * 5} événements)`} onClick={() => onScrub(value - step * 5)}>
+          <span className="px-0.5 text-[10px] font-mono">◀◀</span>
+        </button>
+        <button
+          className={`${transportCls} ${replayPaused && liveActive ? 'border-sky-600/70 text-sky-300' : ''}`}
+          title={!liveActive ? 'Lire la session depuis le début' : replayPaused ? 'Reprendre la lecture' : 'Mettre en pause'}
+          onClick={onPlayPause}
+          data-testid="replay-playpause"
+        >
+          {!liveActive || replayPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+        </button>
+        <button className={transportCls} title={`Avancer (${step * 5} événements)`} onClick={() => onScrub(value + step * 5)}>
+          <span className="px-0.5 text-[10px] font-mono">▶▶</span>
+        </button>
+        <button className={transportCls} title="Aller à la fin de la session" onClick={() => onScrub(replayTotal)}>
+          <SkipForward className="h-3 w-3" />
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={replayTotal}
+          value={value}
+          onChange={(e) => onScrub(Number(e.target.value))}
+          title="Timeline de la session — glissez pour naviguer (avancer / reculer)"
+          className="min-w-0 flex-1 accent-sky-400"
+          aria-label="Position dans la session de routage"
+        />
+      </div>
+      <div className="mt-0.5 flex items-center justify-between text-[9px] text-neutral-500">
+        <span className="font-mono">{value}/{replayTotal} évts</span>
+        <span>glissez pour naviguer · pause/lecture à tout instant</span>
+      </div>
+    </div>
+  )
+}
+
 export function LiveRoutingHud() {
   const live = useStudio((s) => s.liveRouting)
   const liveSpeed = useStudio((s) => s.liveSpeed)
@@ -63,19 +141,23 @@ export function LiveRoutingHud() {
     return (
       <div
         data-testid="replay-bar"
-        className="absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-violet-800/60 bg-black/85 px-3 py-2 shadow-[0_0_24px_rgba(139,92,246,0.18)] backdrop-blur"
+        className="absolute left-1/2 top-3 z-10 w-80 -translate-x-1/2 rounded-lg border border-violet-800/60 bg-black/85 px-3 py-2 shadow-[0_0_24px_rgba(139,92,246,0.18)] backdrop-blur"
       >
-        <button
-          onClick={replayLastRouting}
-          title="Rejouer la dernière session de routage, trait par trait — vitesse réglable avant et pendant la lecture"
-          className="flex items-center gap-1.5 rounded border border-violet-700/60 bg-violet-950/40 px-2 py-0.5 text-[11px] font-bold tracking-wide text-violet-300 transition-colors hover:bg-violet-900/40"
-        >
-          <RotateCcw className="h-3 w-3" /> REPLAY
-        </button>
-        <span className="text-[10px] text-neutral-500">dernière session · vitesse</span>
-        <div className="border-l border-neutral-800 pl-2">
-          <SpeedSelector liveSpeed={liveSpeed} setLiveSpeed={setLiveSpeed} />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={replayLastRouting}
+            title="Rejouer la dernière session de routage, trait par trait — vitesse réglable avant et pendant la lecture"
+            className="flex items-center gap-1.5 rounded border border-violet-700/60 bg-violet-950/40 px-2 py-0.5 text-[11px] font-bold tracking-wide text-violet-300 transition-colors hover:bg-violet-900/40"
+          >
+            <RotateCcw className="h-3 w-3" /> REPLAY
+          </button>
+          <span className="text-[10px] text-neutral-500">dernière session · vitesse</span>
+          <div className="border-l border-neutral-800 pl-2">
+            <SpeedSelector liveSpeed={liveSpeed} setLiveSpeed={setLiveSpeed} />
+          </div>
         </div>
+        {/* Timeline seekable : scrubber dans la session sans la relancer */}
+        <ReplayTimeline />
       </div>
     )
   }
@@ -132,15 +214,19 @@ export function LiveRoutingHud() {
 
       {live.source === 'server' && (
         <div className="mt-1.5 text-[9px] leading-snug text-neutral-500">
-          Nudge live : sélectionnez un composant puis les flèches du clavier —
+          Nudge live : glissez un composant à la souris ou sélectionnez-le puis utilisez les flèches du clavier —
           le routeur repart <span className="text-sky-400">en direct</span> sur la nouvelle position.
         </div>
       )}
       {live.source === 'replay' && (
-        <div className="mt-1.5 text-[9px] leading-snug text-neutral-500">
-          Replay : relecture locale de la session enregistrée — aucun serveur sollicité.
-          À la fin, retour à l&apos;état final canonique.
-        </div>
+        <>
+          {/* Timeline seekable — avancer/reculer dans la session rejouée */}
+          <ReplayTimeline />
+          <div className="mt-1 text-[9px] leading-snug text-neutral-500">
+            Replay : relecture locale de la session enregistrée — aucun serveur sollicité.
+            À la fin, retour à l&apos;état final canonique.
+          </div>
+        </>
       )}
     </div>
   )

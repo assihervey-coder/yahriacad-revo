@@ -145,3 +145,24 @@ Stage Summary:
 - Le studio est devenu un vrai poste de pilotage : les flèches du clavier sculptent la carte (0,5 mm au pas fin, 2 mm en chirurgical), en plein flux live comme au repos ; toute session de routage (live OU pipeline) peut être RE-vue au ralenti ou en timelapse sans recontacter le serveur ; chaque déplacement est annulable niveau par niveau (Ctrl+Z), même ceux faits pendant le live.
 - Dette structurelle réglée au passage : plus aucune fuite GPU dans le rendu three.js (dispose systématique), et l'enregistrement replay est immunisé aux rappels de progression du pipeline.
 
+
+---
+Task ID: 7
+Agent: Super Z (agent principal)
+Task: Nudge à la souris (drag & drop direct) + timeline de replay seekable (avancer/reculer) + redo (Ctrl+Maj+Z) en miroir de l'undo — puis commit + push.
+
+Work Log:
+- Drag & drop direct [souris] : triplet d'actions store beginDrag/dragMoveTo/commitDrag — le PREMIER vrai mouvement pousse l'instantané d'undo (une seule fois, quel que soit le nombre de mousemove) et coupe proprement un éventuel flux live/replay ; le relâchement déclenche le re-routage chirurgical, ou la REPRISE DU FLUX EN DIRECT si une session tournait (dragWasLive) ; un simple clic sans mouvement reste une sélection. Déplacement clampé rotation-aware (marge 0,4 mm, même règle que la chirurgie).
+- Viewer 3D : saisie par raycast sur les meshes composants au pointerdown — OrbitControls désactivé pendant le geste (la souris déplace le composant, plus la caméra), setPointerCapture pour un drag fiable, ray∩plan y=0,8 mm converti en coordonnées carte (mm) à chaque pointermove ; sélection toujours au clic (<5 px).
+- Viewer 2D : même interaction (hit-test rectangle orienté, capture pointeur, curseur grabbing) — feature paritaire avec le 3D.
+- Timeline seekable [DeepPCB ×3] : seekReplay(index) reconstruit INSTANTANÉMENT l'état de la session à n'importe quel instant (replayRebuild rejoue en bloc les événements [0, index) hors pompe : traces + phases + progression + drop des nets échoués), puis la lecture reprend de ce point ; depuis le repos, un scrub ouvre la session EN PAUSE (scrub inspectif), ▶ lit, ⏸ fige (livePaused : la pompe attend, la file est préservée), saut à la fin + reprise → clôture canonique. Position de lecture = total − file restante, poussée au store à chaque tick de replay.
+- HUD : composant ReplayTimeline (slider + transport ⏮ ◀◀ ▶/⏸ ▶▶ ⏭, scrub débouné 90 ms, compteur d'événements) — dans la barre replay HORS session (la timeline survit à la clôture : replayTotal persiste) ET dans le HUD pendant un replay ; fin de session/pipeline met à jour replayTotal (l'enregistrement reste scrubable).
+- Redo [miroir du undo] : pile redoStack (plafonnée 20) — undoSurgical pousse l'état quitté sur redoStack ; redoSurgical dépile, re-empile sur placementHistory, réutilise EXACTEMENT le re-routage chirurgical partagé ; toute NOUVELLE édition invalide le redo (pushPlacementHistory vide la pile) — sémantique standard. Raccourcis Ctrl+Maj+Z ET Ctrl+Y ; bouton « ↻ rétablir » à côté de « ↩ annuler » dans le popup (compteur « N niveau(x) · M à rétablir »).
+- Reset cohérent : setProject/reset/run purgent redoStack + replayPos/Total/Paused + dragRef ; endLiveRouting publie le total enregistré pour la timeline hors session.
+- E2E navigateur (headless, vraie souris/clavier) : pipeline 26/28 nets DFM 87 → scrub réel au slider de la barre replay (ouverture de session en pause à ~60/198) → seek 60 (29 segments, 3 nets reconstruits instantanément) → relecture (60→98 en 2 s) → pause à 100 → recul à 20 (10 segments) → saut à la fin + reprise → clôture canonique (26/28) ; DRAG de U1 à la souris (29,75→36,32 mm, raycast+plan validés, hist=1) pendant la session replay ouverte par le scrub → flux coupé puis REPARTI EN DIRECT (18/28, DFM 76 — position volontairement médiocre, cohérent) ; Ctrl+Z (retour exact 29,75, re-routé 26/28, redo=1) → Ctrl+Maj+Z (retour exact 36,32, re-routé 18/28, redo=0) → clic popup ← (chirurgie −2 mm, détectée par la lecture du rect popup : 506→907 px) → ↩ annuler (36,32) → ↻ rétablir (34,32) — miroir parfait à chaque étape ; zéro erreur page et console.
+- Vérifications : tsc src/ propre ; test-engine TOUS LES TESTS PASSENT (CORE 26/28·DFM 87 via navigateur, suite offline verte).
+
+Stage Summary:
+- Le placement est devenu DIRECT : on saisit un composant à la souris (3D comme 2D), on le dépose où l'on veut — le routeur re-route (ou repart en direct si un flux tournait), et tout est annulable/rétablissable.
+- La session de routage est devenue un VRAI média : timeline seekable avec transport complet — on scrubbe en avant/en arrière, on met en pause sur une frame, on repart, le tout sans recontacter le serveur et à vitesse réglable.
+- L'historique chirurgical est désormais bidirectionnel (undo/redo multi-niveaux, clavier + popup), avec invalidation du redo à la première nouvelle édition.

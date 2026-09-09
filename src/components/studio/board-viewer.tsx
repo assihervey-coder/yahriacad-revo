@@ -106,8 +106,10 @@ export default function BoardViewer() {
   const surgicalMove = useStudio((s) => s.surgicalMove)
   const liveNudge = useStudio((s) => s.liveNudge)
   const undoSurgical = useStudio((s) => s.undoSurgical)
+  const redoSurgical = useStudio((s) => s.redoSurgical)
   const surgicalBusy = useStudio((s) => s.surgicalBusy)
   const historyLen = useStudio((s) => s.placementHistory.length)
+  const redoLen = useStudio((s) => s.redoStack.length)
   const pipelineRunning = useStudio((s) => s.running)
   const liveRoutes = useStudio((s) => s.liveRoutes)
   const liveActive = useStudio((s) => s.liveRouting.active)
@@ -130,13 +132,23 @@ export default function BoardViewer() {
     const onKey = (e: KeyboardEvent) => {
       if (isTyping()) return
       const s = useStudio.getState()
-      // Ctrl/Cmd+Z — undo multi-niveaux chirurgical (hors flux live)
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
-        if (!s.running && !s.surgicalBusy && !s.liveRouting.active && s.placementHistory.length > 0) {
-          e.preventDefault()
-          void s.undoSurgical()
+      // Ctrl/Cmd+Z — undo multi-niveaux · Ctrl/Cmd+Maj+Z / Ctrl+Y — redo (miroir)
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const k = e.key.toLowerCase()
+        if (k === 'z' && !e.shiftKey) {
+          if (!s.running && !s.surgicalBusy && !s.liveRouting.active && s.placementHistory.length > 0) {
+            e.preventDefault()
+            void s.undoSurgical()
+          }
+          return
         }
-        return
+        if ((k === 'z' && e.shiftKey) || k === 'y') {
+          if (!s.running && !s.surgicalBusy && !s.liveRouting.active && s.redoStack.length > 0) {
+            e.preventDefault()
+            void s.redoSurgical()
+          }
+          return
+        }
       }
       if (e.key === 'Escape') {
         if (s.viewer.selectedRef) s.setViewer({ selectedRef: null })
@@ -235,25 +247,71 @@ export default function BoardViewer() {
     heatMesh.rotation.x = -Math.PI / 2
     scene.add(compGroup, traceGroup, keepGroup, heatMesh, pourMesh, pourMeshTop)
 
-    // Raycast sélection
+    // Raycast sélection + DRAG & DROP direct [souris]
     const raycaster = new THREE.Raycaster()
     const pointer = new THREE.Vector2()
     let downPos: { x: number; y: number } | null = null
-    const onPointerDown = (e: PointerEvent) => { downPos = { x: e.clientX, y: e.clientY } }
+    // état du drag : composant saisi + plan de saisie à la surface de la carte
+    let dragTarget: string | null = null
+    const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.8) // y = 0.8 mm (surface)
+    const dragHit = new THREE.Vector3()
+    const screenToNdc = (e: PointerEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect()
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+    }
+    const onPointerDown = (e: PointerEvent) => {
+      downPos = { x: e.clientX, y: e.clientY }
+      // saisie directe : un composant sous le pointeur devient draggable —
+      // la caméra (OrbitControls) s'efface pendant le geste
+      screenToNdc(e)
+      raycaster.setFromCamera(pointer, camera)
+      const hits = raycaster.intersectObjects(compGroup.children, false)
+      if (hits.length) {
+        const ref = hits[0].object.userData.ref as string
+        const s = useStudio.getState()
+        if (!s.running && !s.surgicalBusy && s.livePlacements) {
+          dragTarget = ref
+          controls.enabled = false
+          try { renderer.domElement.setPointerCapture(e.pointerId) } catch { /* sans gravité */ }
+          s.beginDrag(ref)
+          s.setViewer({ selectedRef: ref })
+        }
+      }
+    }
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragTarget) return
+      screenToNdc(e)
+      raycaster.setFromCamera(pointer, camera)
+      if (!raycaster.ray.intersectPlane(dragPlane, dragHit)) return
+      const eng = engineRef.current
+      if (!eng) return
+      // monde 3D → coordonnées carte (mm) — même repère que les placements
+      useStudio.getState().dragMoveTo(dragTarget, dragHit.x + eng.boardW / 2, dragHit.z + eng.boardH / 2)
+    }
     const onPointerUp = (e: PointerEvent) => {
+      const wasDrag = dragTarget
+      dragTarget = null
+      controls.enabled = true
+      if (wasDrag) {
+        downPos = null
+        try { renderer.domElement.releasePointerCapture(e.pointerId) } catch { /* déjà libéré */ }
+        // mouvement réel → commit (re-routage / reprise du flux) ; sinon simple clic = sélection (déjà faite au pointerdown)
+        if (useStudio.getState().dragRef === wasDrag) void useStudio.getState().commitDrag(wasDrag)
+        return
+      }
       if (!downPos) return
       const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y)
       downPos = null
       if (moved > 5) return // c'était une rotation caméra
-      const rect = renderer.domElement.getBoundingClientRect()
-      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
-      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+      screenToNdc(e)
       raycaster.setFromCamera(pointer, camera)
       const hits = raycaster.intersectObjects(compGroup.children, false)
       const ref = hits.length ? (hits[0].object.userData.ref as string) : null
       useStudio.getState().setViewer({ selectedRef: ref })
     }
     renderer.domElement.addEventListener('pointerdown', onPointerDown)
+    renderer.domElement.addEventListener('pointermove', onPointerMove)
     renderer.domElement.addEventListener('pointerup', onPointerUp)
 
     // Resize
@@ -295,6 +353,7 @@ export default function BoardViewer() {
       cancelAnimationFrame(raf)
       ro.disconnect()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
+      renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       controls.dispose()
       renderer.dispose()
@@ -649,21 +708,34 @@ export default function BoardViewer() {
               <button aria-label="Déplacer vers le bas" disabled={surgicalBusy || pipelineRunning} onClick={() => (liveActive ? void liveNudge(viewer.selectedRef!, 0, 2) : void surgicalMove(viewer.selectedRef!, 0, 2))} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">↓</button>
               <button aria-label="Déplacer à droite" disabled={surgicalBusy || pipelineRunning} onClick={() => (liveActive ? void liveNudge(viewer.selectedRef!, 2, 0) : void surgicalMove(viewer.selectedRef!, 2, 0))} className="rounded border border-neutral-700 bg-black/50 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-30">→</button>
             </div>
-            {/* Undo multi-niveaux [Flux.ai] — remonte la pile des déplacements */}
+            {/* Undo / Redo multi-niveaux [Flux.ai] — piles miroir des déplacements */}
             <div className="mt-1 flex items-center justify-between gap-2">
-              <button
-                onClick={() => void undoSurgical()}
-                disabled={surgicalBusy || pipelineRunning || liveActive || historyLen === 0}
-                title={historyLen > 0 ? `Annuler le dernier déplacement (${historyLen} niveau(x) disponibles)` : 'Aucun déplacement à annuler'}
-                data-testid="undo-surgical"
-                className="rounded border border-neutral-700 bg-black/50 px-1.5 py-0.5 text-[10px] text-neutral-300 transition-colors hover:bg-emerald-900/40 hover:text-emerald-200 disabled:opacity-30"
-              >
-                ↩ annuler
-              </button>
-              <span className="text-[9px] text-neutral-500">{historyLen > 0 ? `${historyLen} niveau(x)` : ''}</span>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => void undoSurgical()}
+                  disabled={surgicalBusy || pipelineRunning || liveActive || historyLen === 0}
+                  title={historyLen > 0 ? `Annuler le dernier déplacement (${historyLen} niveau(x) disponibles)` : 'Aucun déplacement à annuler'}
+                  data-testid="undo-surgical"
+                  className="rounded border border-neutral-700 bg-black/50 px-1.5 py-0.5 text-[10px] text-neutral-300 transition-colors hover:bg-emerald-900/40 hover:text-emerald-200 disabled:opacity-30"
+                >
+                  ↩ annuler
+                </button>
+                <button
+                  onClick={() => void redoSurgical()}
+                  disabled={surgicalBusy || pipelineRunning || liveActive || redoLen === 0}
+                  title={redoLen > 0 ? `Rétablir le déplacement annulé (${redoLen} niveau(x) disponibles)` : 'Aucun déplacement à rétablir (Ctrl+Maj+Z)'}
+                  data-testid="redo-surgical"
+                  className="rounded border border-neutral-700 bg-black/50 px-1.5 py-0.5 text-[10px] text-neutral-300 transition-colors hover:bg-emerald-900/40 hover:text-emerald-200 disabled:opacity-30"
+                >
+                  ↻ rétablir
+                </button>
+              </div>
+              <span className="text-[9px] text-neutral-500">{historyLen > 0 ? `${historyLen} niveau(x)` : ''}{redoLen > 0 ? ` · ${redoLen} à rétablir` : ''}</span>
             </div>
             <div className="mt-0.5 text-[9px] leading-snug text-neutral-500">
-              clavier : ← ↑ ↓ → 0,5 mm · <span className="text-neutral-400">Maj = 2 mm</span> · Échap ferme · Ctrl+Z annule
+              souris : glissez le composant directement · clavier : ← ↑ ↓ → 0,5 mm · Maj = 2 mm
+              <br />
+              Échap ferme · Ctrl+Z annule · <span className="text-neutral-400">Ctrl+Maj+Z rétablit</span>
             </div>
             {surgicalBusy && <div className="mt-1 text-[9px] text-emerald-400">{liveActive ? 'reprise du flux…' : 're-routage incrémental…'}</div>}
           </div>

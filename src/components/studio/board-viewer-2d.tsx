@@ -8,7 +8,7 @@
  * heatmap thermique, keepout RF et sélection des composants au clic.
  * Aucune dépendance GPU : rendu logiciel pur via l'API Canvas 2D.
  */
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStudio } from '@/lib/studio-store'
 import { extractConstraints } from '@/lib/engine/parser'
 
@@ -43,6 +43,8 @@ export default function BoardViewer2D() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const viewRef = useRef({ s: 1, ox: 0, oy: 0 })
   const downRef = useRef<{ x: number; y: number } | null>(null)
+  const dragRef = useRef<string | null>(null)
+  const [dragging, setDragging] = useState(false)
 
   const netlist = useStudio((s) => s.netlist)
   const placements = useStudio((s) => s.livePlacements)
@@ -256,44 +258,66 @@ export default function BoardViewer2D() {
     return () => ro.disconnect()
   }, [draw])
 
-  /* Sélection au clic (même interaction que le viewer 3D) */
+  /* Sélection au clic + DRAG & DROP direct (même interaction que le viewer 3D) */
+  const hitTest = (mmX: number, mmY: number): string | null => {
+    if (!placements) return null
+    for (const p of placements) {
+      const c = netlist.components.find((x) => x.ref === p.ref)
+      if (!c) continue
+      const swap = p.rot === 90 || p.rot === 270
+      const w = swap ? c.footprint.h : c.footprint.w
+      const h = swap ? c.footprint.w : c.footprint.h
+      if (mmX >= p.x - w / 2 && mmX <= p.x + w / 2 && mmY >= p.y - h / 2 && mmY <= p.y + h / 2) return p.ref
+    }
+    return null
+  }
+  const toMm = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const { s, ox, oy } = viewRef.current
+    return { mmX: (e.clientX - rect.left - ox) / s, mmY: (e.clientY - rect.top - oy) / s }
+  }
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     downRef.current = { x: e.clientX, y: e.clientY }
+    const { mmX, mmY } = toMm(e)
+    const hit = hitTest(mmX, mmY)
+    const s = useStudio.getState()
+    if (hit && !s.running && !s.surgicalBusy && s.livePlacements) {
+      // saisie directe : le composant devient draggable, la sélection suit
+      dragRef.current = hit
+      setDragging(true)
+      try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* sans gravité */ }
+      s.beginDrag(hit)
+      setViewer({ selectedRef: hit })
+    }
+  }
+  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!dragRef.current) return
+    const { mmX, mmY } = toMm(e)
+    useStudio.getState().dragMoveTo(dragRef.current, mmX, mmY)
   }
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const wasDrag = dragRef.current
+    dragRef.current = null
+    setDragging(false)
+    if (wasDrag) {
+      if (useStudio.getState().dragRef === wasDrag) void useStudio.getState().commitDrag(wasDrag)
+      return // sélection déjà faite au pointerdown
+    }
     const down = downRef.current
     downRef.current = null
     if (!down) return
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const rect = canvas.getBoundingClientRect()
-    const { s, ox, oy } = viewRef.current
-    const mmX = (e.clientX - rect.left - ox) / s
-    const mmY = (e.clientY - rect.top - oy) / s
-    let hit: string | null = null
-    if (placements) {
-      for (const p of placements) {
-        const c = netlist.components.find((x) => x.ref === p.ref)
-        if (!c) continue
-        const swap = p.rot === 90 || p.rot === 270
-        const w = swap ? c.footprint.h : c.footprint.w
-        const h = swap ? c.footprint.w : c.footprint.h
-        if (mmX >= p.x - w / 2 && mmX <= p.x + w / 2 && mmY >= p.y - h / 2 && mmY <= p.y + h / 2) {
-          hit = p.ref
-          break
-        }
-      }
-    }
-    setViewer({ selectedRef: hit })
+    const { mmX, mmY } = toMm(e)
+    setViewer({ selectedRef: hitTest(mmX, mmY) })
   }
 
   return (
     <canvas
       ref={canvasRef}
       data-testid="board-viewer-2d"
-      className="h-full w-full cursor-crosshair"
+      className={`h-full w-full ${dragging ? 'cursor-grabbing' : 'cursor-crosshair'}`}
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     />
   )

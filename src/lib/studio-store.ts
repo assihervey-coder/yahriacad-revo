@@ -106,8 +106,16 @@ interface StudioState {
   liveSpeed: number
   /** Pile d'instantanés de placement — undo multi-niveaux chirurgical (plafonnée à 20) */
   placementHistory: PlacedComponent[][]
+  /** Pile miroir du undo — redo (Ctrl+Maj+Z), dépilée par redoSurgical */
+  redoStack: PlacedComponent[][]
   /** Une session de routage enregistrée peut être rejouée (mode replay) */
   canReplay: boolean
+  /* Timeline de replay seekable — position de lecture dans l'enregistrement */
+  replayPos: number
+  replayTotal: number
+  replayPaused: boolean
+  /** Composant en cours de drag & drop souris (null = aucun) */
+  dragRef: string | null
   setProject: (id: string) => void
   addCustomNetlist: (nl: Netlist) => void
   surgicalMove: (ref: string, dx: number, dy: number) => Promise<void>
@@ -125,8 +133,19 @@ interface StudioState {
   liveNudge: (ref: string, dx: number, dy: number) => Promise<void>
   /** Rejoue la dernière session de routage enregistrée, au tempo local choisi */
   replayLastRouting: () => void
+  /** Timeline seekable : saute à n'importe quel instant de la session (0..replayTotal) */
+  seekReplay: (index: number) => void
+  /** Transport replay : pause / reprise de la lecture */
+  pauseReplay: () => void
+  resumeReplay: () => void
   /** Annule le dernier déplacement chirurgical (multi-niveaux : Ctrl+Z répété) */
   undoSurgical: () => Promise<void>
+  /** Rétablit le dernier déplacement annulé (Ctrl+Maj+Z / Ctrl+Y) */
+  redoSurgical: () => Promise<void>
+  /* Drag & drop direct [souris] — saisie, déplacement continu, engagement */
+  beginDrag: (ref: string) => void
+  dragMoveTo: (ref: string, x: number, y: number) => void
+  commitDrag: (ref: string) => Promise<void>
   beginLiveRouting: (source: 'server' | 'pipeline' | 'replay') => void
   pushLiveTrace: (ev: TraceEvent) => void
   dropLiveNet: (net: string) => void
@@ -164,6 +183,15 @@ let liveLastError: string | null = null
  *  se mute silencieusement au lieu de corrompre la session courante. */
 let liveEpoch = 0
 let livePumpEpoch = -1
+
+/** Replay seekable : pause de la lecture (la file attend, la timeline reste active) */
+let livePaused = false
+/** Total d'événements de la session enregistrée (max du slider de timeline) */
+let replayTotal = 0
+/* Drag & drop : le pointeur a-t-il réellement bougé (commit vs simple clic),
+ * et un flux live/replay a-t-il été coupé au passage (→ reprise EN DIRECT) */
+let dragMoved = false
+let dragWasLive = false
 
 /** Enregistrement de la dernière session de routage (traces, progression,
  *  phases) pour le mode « replay » — rempli à la volée dans liveEnqueue,
@@ -205,9 +233,11 @@ function liveApplyQueued(q: LiveQueued) {
  *  À épreuve d'exceptions ET de générations : un événement défectueux ne tue
  *  jamais la chaîne, et une session supplantée se mute sans rien toucher.
  *  En fin de flux (EOF), le backlog restant est joué par RAFALES bornées —
- *  la finalisation ne traîne pas des dizaines de secondes derrière le rendu. */
+ *  la finalisation ne traîne pas des dizaines de secondes derrière le rendu.
+ *  En replay, la pause fige la lecture — la timeline reste manipulable. */
 function livePump() {
   if (liveTimer || liveQueue.length === 0) return
+  if (livePaused && liveReplaying) return // replay en pause — la file attend
   const speed = useStudio.getState().liveSpeed || 1
   liveTimer = setTimeout(() => {
     liveTimer = null
@@ -226,8 +256,15 @@ function livePump() {
       useStudio.getState().log('system', 'error', `[LIVE] Erreur de lecture du flux : ${liveLastError}`)
     }
     if (livePumpEpoch !== liveEpoch) { liveQueue = []; return } // session remplacée
+    if (liveReplaying) {
+      // Timeline : la position de lecture = total - ce qui reste en file
+      useStudio.setState({ replayPos: Math.max(0, replayTotal - liveQueue.length) })
+    }
     if (liveQueue.length > 0) livePump()
-    else if (liveStreamDone) liveFinish()
+    else if (liveStreamDone) {
+      if (liveReplaying && livePaused) return // pause sur la dernière frame
+      liveFinish()
+    }
   }, Math.max(4, BASE_TICK_MS / speed))
 }
 
@@ -257,6 +294,26 @@ function liveNoteStreamEnd() {
 function liveFlush() {
   if (liveTimer) { clearTimeout(liveTimer); liveTimer = null }
   liveQueue = []
+}
+
+/** Reconstruction INSTANTANÉE de l'état visuel à un instant donné de la
+ *  session enregistrée — le cœur du seek de la timeline : on rejoue en bloc
+ *  les événements [0, upto) hors pompe (traces, phases, progression), puis
+ *  la lecture normale peut reprendre de ce point. */
+function replayRebuild(events: LiveQueued[], upto: number) {
+  const st = useStudio.getState()
+  useStudio.setState({
+    liveRoutes: [],
+    liveRouting: { ...idleLive(), active: true, source: 'replay' },
+  })
+  for (const q of events.slice(0, upto)) {
+    if (q.k === 'trace') st.pushLiveTrace(q.ev)
+    else if (q.k === 'progress') {
+      st.setLiveProgress(q.p)
+      if (!q.p.ok) st.dropLiveNet(q.p.net)
+    } else if (q.k === 'phase') st.setLivePhase(q.phase)
+    else if (q.k === 'hello') st.setLiveProgress({ done: 0, total: q.total, net: '—', ok: true })
+  }
 }
 
 /** Attend (borné) que la lecture locale ait tout joué — utilisé par le pipeline. */
@@ -295,12 +352,14 @@ async function rerouteAfterPlacementEdit(label: string): Promise<boolean> {
   }
 }
 
-/** Pousse l'état de placement courant sur la pile d'undo (plafonnée à 20). */
+/** Pousse l'état de placement courant sur la pile d'undo (plafonnée à 20).
+ *  Toute NOUVELLE édition invalide la pile de redo — comportement standard. */
 function pushPlacementHistory() {
   const s = useStudio.getState()
   if (!s.livePlacements) return
   useStudio.setState((s2) => ({
     placementHistory: [...s2.placementHistory.slice(-19), s2.livePlacements!.map((p) => ({ ...p }))],
+    redoStack: [],
   }))
 }
 
@@ -324,7 +383,12 @@ export const useStudio = create<StudioState>((set, get) => ({
   liveRoutes: [],
   liveSpeed: 1,
   placementHistory: [],
+  redoStack: [],
   canReplay: false,
+  replayPos: 0,
+  replayTotal: 0,
+  replayPaused: false,
+  dragRef: null,
 
   setProject: (id) => {
     const nl = get().customNetlists.find((x) => x.id === id) ?? getNetlist(id)
@@ -341,7 +405,12 @@ export const useStudio = create<StudioState>((set, get) => ({
       plan: null,
       constraintsCount: extractConstraints(nl).length,
       placementHistory: [],
+      redoStack: [],
       canReplay: false,
+      replayPos: 0,
+      replayTotal: 0,
+      replayPaused: false,
+      dragRef: null,
       logs: [{ ts: Date.now(), stage: 'system', level: 'info', msg: `Projet chargé : ${nl.name} — ${nl.description}` }],
       viewer: { ...get().viewer, selectedRef: null },
       liveRouting: idleLive(),
@@ -431,10 +500,16 @@ export const useStudio = create<StudioState>((set, get) => ({
 
   endLiveRouting: () => {
     liveReplaying = false
+    livePaused = false
+    const total = liveRecording.filter((q) => q.k !== 'complete').length
+    if (total > 0) replayTotal = total // la timeline reste consultable hors session
     set({
       liveRouting: idleLive(),
       liveRoutes: [],
       canReplay: liveRecording.some((q) => q.k === 'trace'), // une session interrompue est rejouable aussi
+      replayPos: 0,
+      replayTotal,
+      replayPaused: false,
     })
   },
 
@@ -497,7 +572,8 @@ export const useStudio = create<StudioState>((set, get) => ({
    * La session (traces, progression, phases) a été enregistrée à la volée ;
    * le replay la rejoue via le MÊME moteur de lecture (file + tempo local),
    * donc au ralenti ou en timelapse, SANS recontacter le routeur. La vitesse
-   * reste réglable en plein vol, et l'interruption reste propre. À la fin,
+   * reste réglable en plein vol, l'interruption reste propre, et la TIMELINE
+   * seekable permet d'avancer/reculer dans la session à volonté. À la fin,
    * le viewer retombe sur result.routing — l'état final canonique. */
   replayLastRouting: () => {
     const s = get()
@@ -515,28 +591,174 @@ export const useStudio = create<StudioState>((set, get) => ({
     liveT0 = Date.now()
     get().beginLiveRouting('replay') // vide liveRoutes + repart sur un enregistrement neuf
     liveRecording = events // l'enregistrement survit à la relecture → replay rejouable à volonté
+    replayTotal = events.length
+    livePaused = false
     livePumpEpoch = liveEpoch
     liveQueue.push(...events)
     liveStreamDone = true // fin de flux logique : la lecture se clôturera d'elle-même
+    set({ replayPos: 0, replayTotal, replayPaused: false })
     s.log('system', 'agent', `[REPLAY] Relecture de la dernière session — ${events.length} événements à ×${s.liveSpeed} (réglable en plein vol)…`)
     livePump()
   },
 
-  /* ---------------- Undo multi-niveaux chirurgical [Flux.ai] ----------------
-   * Chaque déplacement (popup, clavier, nudge live) pousse un instantané ;
-   * Ctrl+Z ou le bouton remonte la pile et re-route à chaque étape. Le
-   * re-routage réutilise exactement celui de la chirurgie — l'état retrouvé
-   * est donc complet (SI + DRC/DFM + export). */
+  /* ---------------- Timeline seekable [avancer / reculer] --------------------
+   * Saute à n'importe quel instant de l'enregistrement : reconstruction
+   * instantanée de l'état [0, index) hors pompe, puis la lecture reprend
+   * de ce point (si elle tournait). Depuis le repos, un seek ouvre la
+   * session en pause — l'utilisateur scrubbe, puis presse ▶. */
+  seekReplay: (index) => {
+    const s = get()
+    if (s.running || s.surgicalBusy) return
+    if (s.liveRouting.active && s.liveRouting.source !== 'replay') return // flux serveur/pipeline : intouchable
+    if (!s.liveRouting.active && !s.canReplay) return
+    const events = liveRecording.filter((q) => q.k !== 'complete')
+    if (!events.some((q) => q.k === 'trace')) return
+    const clamped = Math.max(0, Math.min(events.length, Math.round(index)))
+    const wasReplaying = s.liveRouting.active && s.liveRouting.source === 'replay'
+    liveEpoch++ // révoque la pompe/lecture courante
+    liveFlush()
+    if (!wasReplaying) {
+      // entrée dans le mode replay depuis le repos — en PAUSE (scrub inspectif)
+      liveReplaying = true
+      liveStreamDone = true
+      liveSawComplete = false
+      liveT0 = Date.now()
+      livePaused = true
+      get().beginLiveRouting('replay') // reset liveRoutes + active=true (vide liveRecording)
+    }
+    liveRecording = events // l'enregistrement survit au seek
+    replayTotal = events.length
+    replayRebuild(events, clamped)
+    livePumpEpoch = liveEpoch
+    if (clamped < events.length) liveQueue.push(...events.slice(clamped))
+    set({ replayPos: clamped, replayTotal, dragRef: null, replayPaused: livePaused })
+    if (!livePaused) {
+      if (liveQueue.length > 0) livePump()
+      else liveFinish() // saut direct à la fin → retour à l'état canonique
+    }
+  },
+
+  pauseReplay: () => {
+    if (!liveReplaying) return
+    livePaused = true
+    if (liveTimer) { clearTimeout(liveTimer); liveTimer = null }
+    set({ replayPaused: true })
+  },
+
+  resumeReplay: () => {
+    if (!liveReplaying) return
+    livePaused = false
+    set({ replayPaused: false })
+    if (liveQueue.length > 0) livePump()
+    else if (liveStreamDone) liveFinish() // reprise sur la dernière frame → clôture
+  },
+
+  /* ---------------- Undo / Redo multi-niveaux chirurgicaux [Flux.ai] --------
+   * Chaque déplacement (popup, clavier, drag souris, nudge live) pousse un
+   * instantané ; Ctrl+Z ou le bouton remonte la pile et re-route à chaque
+   * étape ; Ctrl+Maj+Z rétablit en miroir (pile redo dépilée, l'état courant
+   * re-empilé sur la pile undo). Le re-routage réutilise exactement celui de
+   * la chirurgie — l'état retrouvé est donc complet (SI + DRC/DFM + export). */
   undoSurgical: async () => {
     const s = get()
     if (s.running || s.surgicalBusy || s.liveRouting.active || !s.livePlacements || !s.result.thermal) return
     const hist = s.placementHistory
     if (hist.length === 0) return
     const prev = hist[hist.length - 1]
-    set({ placementHistory: hist.slice(0, -1), surgicalBusy: true, livePlacements: prev.map((p) => ({ ...p })) })
+    set({
+      placementHistory: hist.slice(0, -1),
+      redoStack: [...s.redoStack.slice(-19), s.livePlacements.map((p) => ({ ...p }))], // l'état quitté devient rétablissable
+      surgicalBusy: true,
+      livePlacements: prev.map((p) => ({ ...p })),
+    })
     s.log('system', 'agent', `[UNDO] Retour au placement précédent (${hist.length - 1} annulation(s) restante(s)) — re-routage incrémental…`)
     await new Promise((r) => setTimeout(r, 40))
     await rerouteAfterPlacementEdit('[UNDO]')
+    set({ surgicalBusy: false })
+  },
+
+  redoSurgical: async () => {
+    const s = get()
+    if (s.running || s.surgicalBusy || s.liveRouting.active || !s.livePlacements || !s.result.thermal) return
+    const redo = s.redoStack
+    if (redo.length === 0) return
+    const next = redo[redo.length - 1]
+    set({
+      redoStack: redo.slice(0, -1),
+      placementHistory: [...s.placementHistory.slice(-19), s.livePlacements.map((p) => ({ ...p }))], // l'état quitté redevient annulable
+      surgicalBusy: true,
+      livePlacements: next.map((p) => ({ ...p })),
+    })
+    s.log('system', 'agent', `[REDO] Déplacement rétabli (${redo.length - 1} rétablissement(s) restant(s)) — re-routage incrémental…`)
+    await new Promise((r) => setTimeout(r, 40))
+    await rerouteAfterPlacementEdit('[REDO]')
+    set({ surgicalBusy: false })
+  },
+
+  /* ---------------- Drag & drop direct [souris] ------------------------------
+   * Saisir un composant et le faire glisser librement : le premier mouvement
+   * pousse l'instantané d'undo (UNE seule fois, quel que soit le nombre de
+   * mousemove) et coupe un éventuel flux live/replay ; le relâchement
+   * déclenche le re-routage chirurgical — ou la reprise du flux EN DIRECT
+   * si un flux tournait. Un simple clic (sans mouvement) reste une sélection. */
+  beginDrag: (ref) => {
+    const s = get()
+    if (s.running || s.surgicalBusy || !s.livePlacements) return
+    dragMoved = false
+    dragWasLive = false
+    set({ dragRef: ref })
+  },
+
+  dragMoveTo: (ref, x, y) => {
+    const s = get()
+    if (!s.livePlacements || s.dragRef !== ref) return
+    if (!dragMoved) {
+      // premier vrai mouvement : snapshot d'undo (une seule fois) + coupure propre du flux
+      dragMoved = true
+      pushPlacementHistory()
+      if (s.liveRouting.active) {
+        dragWasLive = true
+        get().stopLiveRouting('nudge')
+      }
+    }
+    const nl = s.netlist
+    const c = nl.components.find((x2) => x2.ref === ref)
+    if (!c) return
+    const p0 = s.livePlacements.find((p) => p.ref === ref)
+    if (!p0) return
+    const swap = p0.rot === 90 || p0.rot === 270
+    const w = swap ? c.footprint.h : c.footprint.w
+    const h = swap ? c.footprint.w : c.footprint.h
+    // clamp rotation-aware dans la carte (marge 0,4 mm — même règle que la chirurgie)
+    const cx = Math.min(nl.board.w - w / 2 - 0.4, Math.max(w / 2 + 0.4, x))
+    const cy = Math.min(nl.board.h - h / 2 - 0.4, Math.max(h / 2 + 0.4, y))
+    set({ livePlacements: s.livePlacements.map((p) => (p.ref === ref ? { ...p, x: cx, y: cy } : p)) })
+  },
+
+  commitDrag: async (ref) => {
+    const s = get()
+    const wasMoved = dragMoved
+    const wasLive = dragWasLive
+    dragMoved = false
+    dragWasLive = false
+    set({ dragRef: null })
+    if (!wasMoved || !s.livePlacements) return // simple clic sans mouvement → sélection seule
+    if (s.running) return
+    if (wasLive) {
+      // un flux live/replay tournait : le routeur repart EN DIRECT sur la nouvelle géométrie
+      void get().startLiveRouting(3, true)
+      return
+    }
+    if (s.liveRouting.active || s.surgicalBusy) return
+    if (!s.result.thermal) {
+      // pas encore de conception complète : le placement reste tel quel
+      s.log('system', 'warn', `[DRAG] ${ref} repositionné — lancez la conception pour obtenir le re-routage complet.`)
+      return
+    }
+    set({ surgicalBusy: true })
+    s.log('system', 'agent', `[DRAG] ${ref} repositionné à la souris — re-routage incrémental…`)
+    await new Promise((r) => setTimeout(r, 40))
+    await rerouteAfterPlacementEdit('[DRAG]')
     set({ surgicalBusy: false })
   },
 
@@ -640,7 +862,8 @@ export const useStudio = create<StudioState>((set, get) => ({
     liveFlush()
     liveStreamDone = false
     liveRecording = []
-    set({ stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null, running: false, cancelled: false, liveRouting: idleLive(), liveRoutes: [], placementHistory: [], canReplay: false })
+    replayTotal = 0
+    set({ stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null, running: false, cancelled: false, liveRouting: idleLive(), liveRoutes: [], placementHistory: [], redoStack: [], canReplay: false, replayPos: 0, replayTotal: 0, replayPaused: false, dragRef: null })
   },
 
   cancel: () => {
@@ -656,7 +879,8 @@ export const useStudio = create<StudioState>((set, get) => ({
     set({
       running: true, cancelled: false,
       stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null,
-      liveRouting: idleLive(), liveRoutes: [], placementHistory: [], canReplay: false,
+      liveRouting: idleLive(), liveRoutes: [], placementHistory: [], redoStack: [], canReplay: false,
+      replayPos: 0, replayTotal: 0, replayPaused: false, dragRef: null,
     })
     const t0 = Date.now()
     get().log('system', 'info', `═══ DÉBUT DE CONCEPTION AUTONOME — ${nl.name} ═══`)
@@ -684,7 +908,9 @@ export const useStudio = create<StudioState>((set, get) => ({
 
       const routeRate = result.routing.routedNets / Math.max(1, result.routing.totalNets)
       const status = result.drc.errors === 0 && routeRate >= 0.98 ? 'success' : routeRate > 0.8 ? 'partial' : 'error'
-      set({ result, running: false, liveRouting: idleLive(), liveRoutes: [], canReplay: liveRecording.some((q) => q.k === 'trace') })
+      const recTotal = liveRecording.filter((q) => q.k !== 'complete').length
+      if (recTotal > 0) replayTotal = recTotal
+      set({ result, running: false, liveRouting: idleLive(), liveRoutes: [], canReplay: liveRecording.some((q) => q.k === 'trace'), replayPos: 0, replayTotal: recTotal })
       get().log('system', status === 'success' ? 'success' : 'warn',
         `═══ CONCEPTION TERMINÉE en ${((Date.now() - t0) / 1000).toFixed(1)} s — DFM ${result.dfm.score}/100, ${result.drc.errors} erreur(s) DRC ═══`)
 
@@ -753,5 +979,9 @@ if (typeof window !== 'undefined') {
     lastError: liveLastError,
     recording: liveRecording.length,
     replaying: liveReplaying,
+    paused: livePaused,
+    replayTotal,
+    dragMoved,
+    dragWasLive,
   })
 }
