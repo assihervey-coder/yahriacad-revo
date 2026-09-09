@@ -1,0 +1,198 @@
+{
+  "document_meta": {
+    "title": "NEXUS PCB — Landing décideurs",
+    "total_pages": 6
+  },
+  "art_direction": {
+    "palette_mode": "minimal",
+    "color_harmony": "split_complementary",
+    "background_svg": "noise",
+    "canvas_width": 794,
+    "canvas_height": 1123,
+    "design_rationale": "Autorité sobre à destination de la direction : blanc éditorial, accent split-complémentaire discret, grain de bruit qui ancre la lecture stratégique."
+  },
+  "pages": [
+    {
+      "page_index": 1,
+      "narrative_role": "Burst",
+      "archetype": "cover_hero",
+      "components": [
+        {
+          "type": "Floating_Meta",
+          "position": "top-left",
+          "items": ["NEXUS PCB", "BRIEFING DIRECTION"]
+        },
+        {
+          "type": "Hero_Typography",
+          "weight": "black",
+          "variant": "standard",
+          "scale": 5,
+          "content": "MATÉRIEL.<br>SANS<br>RE-SPIN."
+        },
+        {
+          "type": "Floating_Meta",
+          "position": "bottom-right",
+          "items": ["09.2026", "RÉVISION E39921B"]
+        }
+      ]
+    },
+    {
+      "page_index": 2,
+      "narrative_role": "Expand",
+      "archetype": "data_dashboard",
+      "components": [
+        {
+          "type": "Page_Ghost_Number",
+          "number": "02"
+        },
+        {
+          "type": "Glass_Canvas",
+          "markdown_content": "### Le coût se cache dans les itérations\nChaque itération matérielle coûte trois fois : en composants jetés, en semaines d'avance perdues, en marché manqué. Le pire n'est pas le re-spin lui-même\u00a0— c'est de le découvrir chez l'usine, après coup, quand le routage est déjà figé. Une direction n'a pas besoin d'un énième outil de dessin : elle a besoin d'une chaîne qui exécute, prouve et rejoue\u00a0— et qui le prouve. NEXUS PCB automatise la boucle complète\u00a0— placement, routage, vérification, export\u00a0— et rend chaque décision vérifiable en un clic, du netlist au Gerber."
+        },
+        {
+          "type": "Stat_Block",
+          "number": "5",
+          "unit": "s",
+          "label": "POUR TROIS CARTES COMPLÈTES EN HORS-LIGNE"
+        },
+        {
+          "type": "Stat_Block",
+          "number": "41",
+          "unit": "vias",
+          "label": "SUR LA CARTE LA PLUS DENSE, PLANS DÉDIÉS"
+        },
+        {
+          "type": "Stat_Block",
+          "number": "3",
+          "unit": "sprints",
+          "label": "POUR FERMER LES SIX CHANTIERS RESTANTS"
+        }
+      ]
+    },
+    {
+      "page_index": 3,
+      "narrative_role": "Expand",
+      "archetype": "tufte_report",
+      "components": [
+        {
+          "type": "Delta_Widget",
+          "metric": "ROUTAGE 4 COUCHES",
+          "value": "93 %",
+          "delta": "+7 pts",
+          "trend": "up",
+          "label": "vs bicouche, carte dense"
+        },
+        {
+          "type": "Delta_Widget",
+          "metric": "VIAS (CORE)",
+          "value": "41",
+          "delta": "−50 %",
+          "trend": "down",
+          "label": "plans cuivre dédiés"
+        },
+        {
+          "type": "Delta_Widget",
+          "metric": "SCORE DFM",
+          "value": "87/100",
+          "delta": "+3 pts",
+          "trend": "up",
+          "label": "plans dédiés vérifiés"
+        },
+        {
+          "type": "Glass_Canvas",
+          "markdown_content": "### Des gains mesurés, pas promis\nCes chiffres proviennent de la suite de vérification exécutée à chaque push : sept points de routage gagnés en quatre couches, vias divisés par deux, DFM porté à 87 sur 100. La boucle d'amélioration continue est en place ; la suite est chiffrée et planifiée."
+        },
+        {
+          "type": "Sidenote_Block",
+          "label": "SOURCE",
+          "body": "Suite moteur `test-engine.ts`, révision e39921b : 85 contrôles au vert sur trois projets industriels."
+        }
+      ]
+    },
+    {
+      "page_index": 4,
+      "narrative_role": "Expand",
+      "archetype": "split_vertical",
+      "components": [
+        {
+          "type": "Glass_Canvas",
+          "markdown_content": "### Une qualité qui bloque, pas qui promet\nLa crédibilité d'un outil d'ingénierie se juge à sa discipline interne. Chez NEXUS PCB, elle est mécanique : aucun push ne passe sans la suite moteur complète, sans le smoke test du flux temps réel, sans la vérification TypeScript stricte et sans l'E2E navigateur sur trois résolutions. Une régression devient un échec visible, pas une note de bas de page. Cette exigence est documentée, committée et rejouable par un tiers\u00a0— c'est l'auditabilité qui transforme une promesse de fiabilité en caractéristique contractuelle."
+        },
+        {
+          "type": "Stat_Block",
+          "number": "118",
+          "unit": "contrôles",
+          "label": "MOTEUR + E2E, BLOQUANTS À CHAQUE PUSH"
+        },
+        {
+          "type": "Floating_Meta",
+          "position": "top-right",
+          "items": ["CONFIANCE", "04"]
+        }
+      ]
+    },
+    {
+      "page_index": 5,
+      "narrative_role": "Expand",
+      "archetype": "editorial_flow",
+      "components": [
+        {
+          "type": "Hero_Typography",
+          "weight": "thin",
+          "variant": "standard",
+          "scale": 4,
+          "content": "UNE FEUILLE<br>DE ROUTE<br>COURTE."
+        },
+        {
+          "type": "Process_List",
+          "steps": [
+            {
+              "title": "Comparaison de runs",
+              "description": "Deltas de DFM, de vias et de longueur dans l'historique\u00a0— la boucle d'amélioration devient lisible."
+            },
+            {
+              "title": "Session portable",
+              "description": "Import du JSON de replay : une démonstration rejouée à l'identique, machine différente."
+            },
+            {
+              "title": "ODB++ et Gerber X2",
+              "description": "Les formats d'échange des flux industriels, aux côtés du RS-274X déjà livré."
+            },
+            {
+              "title": "Équipe et preuve",
+              "description": "Persistance Postgres à rôles, journal d'éditions, corrélation des modèles sur cartes mesurées."
+            }
+          ]
+        },
+        {
+          "type": "Glass_Canvas",
+          "markdown_content": "### Six chantiers, trois sprints\nChaque étape ci-dessus porte un critère d'achèvement mesurable, vérifiable par la suite de tests ou par un artefact d'export. L'ordre est choisi pour protéger la crédibilité acquise : valeur immédiate, formats industriels, puis preuve physique et collaboration d'équipe."
+        }
+      ]
+    },
+    {
+      "page_index": 6,
+      "narrative_role": "Echo",
+      "archetype": "cover_hero",
+      "components": [
+        {
+          "type": "Floating_Meta",
+          "position": "top-left",
+          "items": ["NEXUS PCB", "SÉANCE DE 30 MINUTES"]
+        },
+        {
+          "type": "Hero_Typography",
+          "weight": "black",
+          "variant": "standard",
+          "scale": 5,
+          "content": "RÉSERVEZ UN<br>EXECUTIVE<br>BRIEFING."
+        },
+        {
+          "type": "Floating_Meta",
+          "position": "bottom-right",
+          "items": ["DÉMONSTRATION SUR VOS CAS D'USAGE", "2026"]
+        }
+      ]
+    }
+  ]
+}

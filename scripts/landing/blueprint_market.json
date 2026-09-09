@@ -1,0 +1,220 @@
+{
+  "document_meta": {
+    "title": "NEXUS PCB — Landing marketeurs",
+    "total_pages": 6
+  },
+  "art_direction": {
+    "palette_mode": "light",
+    "color_harmony": "triadic",
+    "background_svg": "continuous_flow",
+    "canvas_width": 794,
+    "canvas_height": 1123,
+    "design_rationale": "Énergie marketing maîtrisée : fond clair premium, accent triadique pour la vitalité commerciale, courbe continue qui relie les six pages comme le scroll d'une landing."
+  },
+  "pages": [
+    {
+      "page_index": 1,
+      "narrative_role": "Burst",
+      "archetype": "cover_hero",
+      "components": [
+        {
+          "type": "Floating_Meta",
+          "position": "top-left",
+          "items": [
+            "NEXUS PCB",
+            "STUDIO DE CONCEPTION"
+          ]
+        },
+        {
+          "type": "Hero_Typography",
+          "weight": "black",
+          "variant": "standard",
+          "scale": 5,
+          "content": "LE PCB SE<br>CONÇOIT SOUS<br>VOS YEUX."
+        },
+        {
+          "type": "Floating_Meta",
+          "position": "bottom-right",
+          "items": [
+            "DÉMO LIVE",
+            "2026"
+          ]
+        }
+      ]
+    },
+    {
+      "page_index": 2,
+      "narrative_role": "Expand",
+      "archetype": "data_dashboard",
+      "components": [
+        {
+          "type": "Page_Ghost_Number",
+          "number": "02"
+        },
+        {
+          "type": "Glass_Canvas",
+          "markdown_content": "### Concevoir à l'aveugle, c'est payer deux fois\nAujourd'hui, une carte part chez l'usine avant que quiconque n'ait vu le routage terminé. Le DFM se découvre au retour de l'usine, sous forme de re-spin : trois semaines perdues, un budget englouti, un planning glissant. Entre la netlist et le Gerber, le routeur travaille en boîte noire — personne ne peut dire si la piste critique est passée au bon endroit, ni pourquoi. NEXUS PCB inverse cette logique : la conception devient observable, interruptible et rejouable, du premier placement au dernier via."
+        },
+        {
+          "type": "Stat_Block",
+          "number": "9",
+          "unit": "étapes",
+          "label": "DE LA NETLIST AU FICHIER FABRICANT, AUTOMATISÉES"
+        },
+        {
+          "type": "Stat_Block",
+          "number": "16 000",
+          "unit": "événements",
+          "label": "D'HISTORIQUE DE REPLAY PAR SESSION"
+        }
+      ]
+    },
+    {
+      "page_index": 3,
+      "narrative_role": "Expand",
+      "archetype": "editorial_flow",
+      "components": [
+        {
+          "type": "Hero_Typography",
+          "weight": "thin",
+          "variant": "standard",
+          "scale": 4,
+          "content": "LE ROUTAGE,<br>EN DIRECT."
+        },
+        {
+          "type": "Process_List",
+          "steps": [
+            {
+              "title": "Netlist & contraintes",
+              "description": "Trois projets industriels embarqués, contraintes implicites extraites automatiquement."
+            },
+            {
+              "title": "Placement RL",
+              "description": "Recuit simulé 12 000 itérations, légalisation sans chevauchement."
+            },
+            {
+              "title": "Routage live",
+              "description": "Chaque piste et chaque via diffusés par flux SSE, interruptibles d'un clic."
+            },
+            {
+              "title": "Vérification & export",
+              "description": "DRC, DFM sur 100, Gerber RS-274X, Excellon, BOM et POS."
+            }
+          ]
+        },
+        {
+          "type": "Glass_Canvas",
+          "markdown_content": "### Trois piliers, zéro boîte noire\n**Routage visible.** Chaque piste apparaît en direct, à la vitesse choisie — du ralenti ×0,5 à l'accéléré ×4.\n**Qualité embarquée.** DRC et DFM usine s'exécutent pendant le routage : le score sur 100 est connu avant l'export, pas après l'usine.\n**Mémoire partageable.** La session se rejoue sur la timeline seekable et s'exporte en JSON — vos collègues voient exactement ce que le moteur a fait, et pourquoi."
+        }
+      ]
+    },
+    {
+      "page_index": 4,
+      "narrative_role": "Expand",
+      "archetype": "data_dashboard",
+      "components": [
+        {
+          "type": "Stat_Block",
+          "number": "93",
+          "unit": "%",
+          "label": "NETS ROUTÉS EN 4 COUCHES — PROJET LE PLUS DENSE",
+          "data_points": [
+            86,
+            93,
+            100,
+            81
+          ]
+        },
+        {
+          "type": "Stat_Block",
+          "number": "0,00",
+          "unit": "mm",
+          "label": "SKEW DE LA PAIRE DIFFÉRENTIELLE USB"
+        },
+        {
+          "type": "Stat_Block",
+          "number": "90",
+          "unit": "/100",
+          "label": "SCORE DFM MESURÉ SUR NEXUS-IOT"
+        },
+        {
+          "type": "Stat_Block",
+          "number": "118",
+          "unit": "contrôles",
+          "label": "AUTOMATISÉS À CHAQUE PUSH"
+        },
+        {
+          "type": "Glass_Canvas",
+          "markdown_content": "### Ce que cela prouve\nChaque valeur provient d'une suite reproductible : la même commande rejoue 85 contrôles moteur et 33 vérifications d'interface en moins d'une minute. Un skew nul, 93 % de nets routés, un DFM de 90 : ce ne sont pas des objectifs marketing, ce sont les dernières mesures d'une chaîne vérifiée à chaque push, bloquante par construction."
+        },
+        {
+          "type": "Hairline_Divider",
+          "style": "accent"
+        },
+        {
+          "type": "Floating_Meta",
+          "position": "bottom-right",
+          "items": [
+            "SUITE MOTEUR",
+            "RÉVISION E39921B"
+          ]
+        }
+      ]
+    },
+    {
+      "page_index": 5,
+      "narrative_role": "Expand",
+      "archetype": "split_vertical",
+      "components": [
+        {
+          "type": "Glass_Canvas",
+          "markdown_content": "### Pas un fichier de plus : une scène\nLes outils classiques rendent un résultat. NEXUS PCB rend un processus. Vous voyez le routeur hésiter, riper, recommencer ; vous intervenez d'un nudge pendant qu'il travaille, vous annulez, vous rejouez. La timeline seekable rejoue la session comme un enregistrement sportif, et un bouton l'exporte en JSON — rejouable ailleurs, joignable à un devis. Livrer une carte devient raconter une conception."
+        },
+        {
+          "type": "Stat_Block",
+          "number": "×4",
+          "unit": "",
+          "label": "VITESSE DE LECTURE RÉGLABLE EN PLEIN VOL"
+        },
+        {
+          "type": "Floating_Meta",
+          "position": "top-right",
+          "items": [
+            "DIFFÉRENCIATION",
+            "05"
+          ]
+        }
+      ]
+    },
+    {
+      "page_index": 6,
+      "narrative_role": "Echo",
+      "archetype": "cover_hero",
+      "components": [
+        {
+          "type": "Floating_Meta",
+          "position": "top-left",
+          "items": [
+            "NEXUS PCB",
+            "DÉMONSTRATION SUR VOS PROJETS"
+          ]
+        },
+        {
+          "type": "Hero_Typography",
+          "weight": "black",
+          "variant": "standard",
+          "scale": 5,
+          "content": "VOYEZ LE<br>ROUTAGE.<br>EN DIRECT."
+        },
+        {
+          "type": "Floating_Meta",
+          "position": "bottom-right",
+          "items": [
+            "DEMANDEZ VOTRE DÉMO",
+            "2026"
+          ]
+        }
+      ]
+    }
+  ]
+}

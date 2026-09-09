@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=Noto+Sans+SC:wght@300;400;500;700;900&family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&display=swap" rel="stylesheet">
+    <title>NEXUS PCB&nbsp;— Landing marketeurs</title>
+    <style>
+        :root {
+  /* 60% ground */
+  --c-bg: #f4f3f0;
+  --c-bg-rgb: 244,243,240;
+  /* 30% structure */
+  --c-mid: #e9e7df;
+  --c-mid-rgb: 233,231,223;
+  /* 10% emphasis */
+  --c-accent: #844898;
+  --c-accent-rgb: 132,72,152;
+  /* Typography */
+  --c-text: #1e1d19;
+  --c-muted: #827f76;
+  /* Surfaces */
+  --c-surface: rgba(0,0,0,0.02);
+}
+        
+@page {
+  size: 794px 1123px;
+  margin: 0;
+}
+:root {
+  --font-sans: 'Inter', 'Noto Sans SC', 'FreeSerif', 'Noto Color Emoji', sans-serif;
+  --font-serif: 'Playfair Display', 'Noto Serif SC', 'Cormorant Garamond', 'Noto Color Emoji', serif;
+  --font-mono: 'Liberation Mono', 'DejaVu Sans Mono', 'Noto Color Emoji', monospace;
+
+  /* Typographic Scale&nbsp;— 6-level fluid type system (Modular Scale) */
+  --text-scale-6: clamp(64px, 12vw, 150px);   /* Hero / Display&nbsp;— oversized, single word or short phrase */
+  --text-scale-5: clamp(48px, 8vw, 96px);      /* Primary Title&nbsp;— poster headline */
+  --text-scale-4: clamp(32px, 5vw, 56px);      /* Subheadline&nbsp;— chapter opener or key quote */
+  --text-scale-3: clamp(20px, 3vw, 32px);      /* Lead Paragraph&nbsp;— slightly larger than body */
+  --text-scale-2: 16px;                         /* Body&nbsp;— standard body text */
+  --text-scale-1: 12px;                         /* Meta / Caption&nbsp;— minimum readable size */
+}
+html, body {
+  margin: 0; padding: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-sans), sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+/* Browser preview: scale poster to fit viewport & center on matching background */
+@media screen {
+  html {
+    height: auto;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    background: var(--c-bg);
+  }
+  body {
+    transform-origin: top center;
+    margin: 0 auto;
+    box-shadow: 0 0 60px rgba(0,0,0,0.3);
+    /* scale injected by override_css with concrete canvas dimensions */
+  }
+}
+.canvas {
+  width: var(--canvas-w, 720px);
+  min-height: var(--canvas-h, 960px);
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  page-break-after: always;
+}
+/* ═══ Continuous Canvas Mode (multi-page as one seamless surface) ═══ */
+.continuous-canvas {
+  width: var(--canvas-w, 720px);
+  box-sizing: border-box;
+  /* Document-flow mode: no fixed height, no overflow:hidden.
+     Each .page-section is a block-level box that stacks naturally.
+     Playwright slices pages at break-after boundaries. */
+}
+.continuous-canvas .bg-layer-full {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  /* Note: in document-flow mode, this spans only as far as the
+     first page-section. Per-page bg-layer handles each page's bg. */
+}
+.continuous-canvas .bg-layer-full svg {
+  width: 100%;
+  height: 100%;
+}
+.continuous-canvas .page-section {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: visible;
+  break-after: page;
+  /* height set inline per page (e.g. 960px) */
+}
+.continuous-canvas .page-section:last-child {
+  break-after: auto; /* no trailing blank page */
+}
+.continuous-canvas .page-section .safe-zone {
+  position: absolute;
+  inset: 10% 12%;
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  grid-template-rows: repeat(12, minmax(0, auto));
+  align-content: start;
+}
+.continuous-canvas .page-section .page-ghost {
+  position: absolute;
+  bottom: -5%;
+  right: 5%;
+  font-size: 240px;
+  font-weight: 900;
+  color: var(--c-mid);
+  opacity: 0.05;
+  pointer-events: none;
+  z-index: 0;
+}
+/* 12% Breathing Margin Enforcer (balanced: enough air without wasting space) */
+.safe-zone {
+  position: absolute;
+  inset: 10% 12%;
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  grid-template-rows: repeat(12, minmax(0, auto));
+  align-content: start;
+  /* gap is injected dynamically by compile_blueprint via inline style */
+}
+/* Grid-item wrapper&nbsp;— every component gets one */
+.grid-item {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+/* Global content-overflow protection&nbsp;— prevents ANY text/block from breaking out of its container */
+.grid-item * {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.grid-item p, .grid-item li, .grid-item span, .grid-item h1, .grid-item h2, .grid-item h3, .grid-item h4, .grid-item td, .grid-item th, .grid-item div {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+/* CJK-safe text wrapping: prefer keeping CJK word groups intact, but allow break when necessary */
+.hero-type, .hero-sub, .glass-canvas, .shaped-content, .stat-label, .delta-metric, .delta-label {
+  text-wrap: balance;
+  overflow-wrap: break-word;
+  word-break: normal;
+  line-break: strict;
+}
+
+/* ═══ Micro-Typography: Computational Typesetting ═══ */
+p, .glass-canvas, .shaped-content, li {
+  /* Algorithmic justification&nbsp;— eliminates white rivers between words */
+  text-align: justify;
+  hyphens: auto;
+  word-spacing: -0.05em;
+  /* Hanging punctuation&nbsp;— visually aligned optical edges */
+  hanging-punctuation: first last;
+  /* Kill orphans & widows&nbsp;— force min 3 lines carried across page breaks */
+  orphans: 3;
+  widows: 3;
+}
+.grid-item table {
+  width: 100%;
+  table-layout: fixed;
+  overflow: hidden;
+}
+.grid-item img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* --- Archetype Layouts --- */
+/* All archetypes share the 12×12 grid via .safe-zone.
+   Archetype classes may override alignment defaults on the canvas level. */
+.archetype-cover_hero .safe-zone {
+  align-content: start;
+  inset: 12% 14%;
+}
+/* Cover hero typography scale: larger text for covers */
+.archetype-cover_hero .hero-type {
+  font-size: clamp(42px, 8vw, 72px);
+  line-height: 1.15;
+}
+.archetype-cover_hero .hero-sub {
+  font-size: clamp(22px, 4vw, 32px);
+  line-height: 1.3;
+  opacity: 0.85;
+}
+.archetype-cover_hero .floating-meta {
+  font-size: clamp(16px, 2.5vw, 22px);
+}
+.archetype-split_vertical { display: grid; grid-template-columns: 1fr 1fr; min-height: 960px; }
+.archetype-split_vertical .safe-zone { position: relative; inset: auto; padding: 10%; display: grid; grid-template-columns: repeat(12, 1fr); grid-template-rows: repeat(12, 1fr); align-content: center; }
+.archetype-split_vertical.single-column { grid-template-columns: 1fr; }
+.archetype-editorial_flow .safe-zone { align-content: center; }
+.archetype-scattered_canvas .safe-zone { /* same 12×12 grid&nbsp;— scattered effect via grid_area placement */ }
+.archetype-data_dashboard .safe-zone { /* same 12×12 grid&nbsp;— dashboard tiles via grid_area placement */ }
+.archetype-shaped_editorial .safe-zone { align-content: center; }
+
+/* Continuous canvas archetype overrides (page-section inherits archetype class) */
+.continuous-canvas .page-section.archetype-cover_hero .safe-zone { align-content: start; inset: 12% 14%; }
+.continuous-canvas .page-section.archetype-cover_hero .hero-type { font-size: clamp(42px, 8vw, 72px); line-height: 1.15; }
+.continuous-canvas .page-section.archetype-cover_hero .hero-sub { font-size: clamp(22px, 4vw, 32px); line-height: 1.3; opacity: 0.85; }
+.continuous-canvas .page-section.archetype-cover_hero .floating-meta { font-size: clamp(16px, 2.5vw, 22px); }
+.continuous-canvas .page-section.archetype-editorial_flow .safe-zone { align-content: center; }
+.continuous-canvas .page-section.archetype-shaped_editorial .safe-zone { align-content: center; inset: 5% 6%; }
+
+/* --- Components --- */
+.hero-type {
+  font-size: clamp(48px, 10vw, 110px);
+  line-height: 0.88;
+  letter-spacing: -0.03em;
+  margin: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  position: relative;
+  z-index: 10;
+}
+.hero-type.weight-black { font-weight: 900; }
+.hero-type.weight-thin { font-weight: 100; letter-spacing: 0.05em; font-family: var(--font-serif), sans-serif; }
+.hero-sub {
+  margin: 8px 0 0 0;
+  font-size: var(--text-scale-2);
+  line-height: 1.3;
+  opacity: 0.8;
+}
+/* Hero container needs vertical stacking */
+.grid-item:has(.hero-type) {
+  flex-direction: column;
+  justify-content: center;
+}
+.hero-type, .hero-sub {
+  width: 100%;
+}
+.hero-type {
+  color: var(--c-text);
+}
+
+.glass-canvas {
+  background: var(--c-surface);
+  border: 1px solid rgba(128, 128, 128, 0.08);
+  border-radius: 2px;
+  padding: 36px;
+  font-size: 16px;
+  line-height: 1.6;
+  z-index: 5;
+  position: relative;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.floating-meta {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  font-family: var(--font-mono), sans-serif;
+  letter-spacing: 0.1em;
+  color: var(--c-muted);
+  opacity: 0.6;
+  z-index: 20;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Positioned via grid_area in .grid-item wrapper&nbsp;— no absolute needed */
+}
+/* Legacy position helpers (kept for backwards compat with old blueprints) */
+.pos-top-left { align-self: start; justify-self: start; }
+.pos-top-right { align-self: start; justify-self: end; text-align: right; }
+.pos-bottom-left { align-self: end; justify-self: start; }
+.pos-bottom-right { align-self: end; justify-self: end; text-align: right; }
+
+.stat-block { display: flex; flex-direction: column; margin-bottom: 24px; }
+.stat-num { font-size: clamp(32px, 5vw, 56px); font-weight: 900; line-height: 0.9; color: var(--c-text); }
+.stat-unit { font-size: clamp(14px, 2vw, 20px); font-weight: 300; color: var(--c-muted); margin-left: 4px; display: inline;}
+.stat-label { font-size: 12px; letter-spacing: 0.15em; color: var(--c-accent); margin-top: 8px; text-transform: uppercase; }
+
+.hairline { border: none; border-top: 0.5px solid var(--c-muted); opacity: 0.3; margin: 8px 0; width: 100%; }
+.hairline.style-accent { border-top-color: var(--c-accent); width: 30%; margin-left: 0; opacity: 0.8;}
+
+.page-ghost {
+  position: absolute; bottom: -5%; right: 5%;
+  font-size: 240px; font-weight: 900; color: var(--c-mid);
+  opacity: 0.05; pointer-events: none; z-index: 0;
+}
+
+.bg-layer { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.bg-layer svg { width: 100%; height: 100%; }
+
+/* --- Shaped_Canvas (Semantic Shape-Wrapping) --- */
+.shaped-canvas {
+  position: relative;
+  padding: 24px;
+  font-size: 16px;
+  line-height: 1.7;
+  z-index: 5;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.shape-float {
+  float: left;
+  margin: 0;
+  padding: 0;
+}
+.shape-circle   { shape-outside: circle(45% at 50% 50%);   width: 40%; height: 90%; }
+.shape-wave     { shape-outside: polygon(0 0, 80% 0, 60% 25%, 80% 50%, 60% 75%, 80% 100%, 0 100%); width: 45%; height: 100%; }
+.shape-diagonal_slash { shape-outside: polygon(0 0, 100% 0, 0 100%); width: 50%; height: 100%; }
+.shape-diamond  { shape-outside: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); width: 45%; height: 90%; }
+.shape-wedge_right { shape-outside: polygon(0 0, 60% 0, 100% 50%, 60% 100%, 0 100%); width: 50%; height: 100%; }
+
+/* --- Archetype: shaped_editorial --- */
+.archetype-shaped_editorial .safe-zone {
+  inset: 5% 6%;
+  /* Inherits 12×12 grid from .safe-zone */
+  align-content: center;
+}
+
+/* ═══ Tufte Marginalia System ═══ */
+/* 30% sidenote rail for report/long-form archetypes */
+.archetype-tufte_report .safe-zone {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 40px;
+  align-content: start;
+}
+.archetype-tufte_report .main-column {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  grid-template-rows: repeat(12, 1fr);
+  gap: inherit;
+}
+.archetype-tufte_report .side-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-top: 8px;
+}
+.sidenote {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--c-muted);
+  border-left: 2px solid var(--c-accent);
+  padding-left: 12px;
+  opacity: 0.85;
+}
+.sidenote .sidenote-label {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--c-accent);
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* ═══ Delta Widget&nbsp;— Data-to-Ink Ratio Component ═══ */
+.delta-widget {
+  text-align: center;
+  padding: 16px 12px;
+}
+.delta-widget .delta-metric {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--c-muted);
+  margin-bottom: 4px;
+}
+.delta-widget .delta-value {
+  font-size: 36px;
+  font-weight: 900;
+  color: var(--c-text);
+  line-height: 1.1;
+}
+.delta-widget .delta-change {
+  font-size: 14px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+.delta-widget .delta-label {
+  font-size: 12px;
+  color: var(--c-muted);
+  margin-top: 8px;
+}
+
+/* ═══ Polymorphic Process_List&nbsp;— Container Query Adaptive ═══ */
+.process-list-container {
+  container-type: inline-size;
+  width: 100%;
+  min-height: 100%;
+}
+/* Wide: horizontal timeline */
+.process-list {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  min-height: 100%;
+}
+.process-list .process-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  position: relative;
+  padding: 12px 4px;
+}
+.process-step .step-num {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--c-accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 14px; margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.process-step .step-title { font-weight: 700; font-size: 13px; color: var(--c-text); }
+.process-step .step-desc { font-size: 12px; color: var(--c-muted); margin-top: 4px; line-height: 1.4; }
+/* Connector line between horizontal steps */
+.process-step:not(:last-child)::after {
+  content: ''; position: absolute; top: 28px; right: -6px;
+  width: 12px; height: 2px; background: var(--c-accent); opacity: 0.5;
+}
+/* Narrow: vertical numbered list */
+@container (max-width: 360px) {
+  .process-list {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .process-list .process-step {
+    flex-direction: row;
+    text-align: left;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 4px 0;
+  }
+  .process-step .step-num { margin-bottom: 0; }
+  .process-step:not(:last-child)::after { display: none; }
+}
+
+        :root { --canvas-w: 794px; --canvas-h: 1123px; }
+@page { size: 794px 1123px; margin: 0; }
+html, body { width: 794px; min-height: 1123px; }
+@media screen { body { scale: min(1, calc(100vw / 794), calc(100vh / 1123)); } }
+
+    </style>
+</head>
+<body>
+
+<div class="continuous-canvas" style="background: var(--c-bg);">
+
+  <div class="page-section archetype-cover_hero" style="height: 1123px;">
+    <div class="bg-layer" style="position:absolute;inset:0;z-index:1;pointer-events:none;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 794 6738" width="794" height="6738">
+  <defs>
+    <linearGradient id="fg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#844898" stop-opacity="0.05"/>
+      <stop offset="50%" stop-color="#844898" stop-opacity="0.075"/>
+      <stop offset="100%" stop-color="#844898" stop-opacity="0.025"/>
+    </linearGradient>
+  </defs>
+  <path d="M486,0 C516,180 175,360 95,518 C643,591 640,900 254,1037 C270,1139 760,1346 221,1555 C74,1645 673,1918 547,2073 C641,2290 426,2510 509,2592 C301,2773 659,2957 646,3110 C684,3296 559,3361 135,3628 C181,3757 63,3917 347,4146 C80,4273 505,4462 98,4665 C294,4778 212,5094 218,5183 C515,5376 136,5571 400,5701 C130,5848 786,6071 96,6220 C442,6428 669,6617 206,6738" fill="none" stroke="url(#fg)" stroke-width="71" stroke-linecap="round" opacity="0.050"/>
+  <path d="M100,0 C209,188 713,322 280,518 C174,789 405,779 249,1037 C37,1130 498,1437 213,1555 C335,1639 303,1996 678,2073 C420,2338 683,2318 636,2592 C572,2799 426,2887 279,3110 C509,3203 345,3443 496,3628 C757,3874 209,3970 331,4146 C142,4400 691,4448 660,4665 C507,4858 121,5059 371,5183 C428,5410 421,5425 248,5701 C257,5776 738,6119 236,6220 C660,6352 46,6637 436,6738" fill="none" stroke="url(#fg)" stroke-width="107" stroke-linecap="round" opacity="0.060"/>
+  <path d="M134,0 C160,133 790,372 388,518 C348,693 96,805 123,1037 C268,1225 183,1323 563,1555 C56,1752 182,1978 566,2073 C683,2158 189,2449 161,2592 C170,2689 743,2948 381,3110 C375,3338 641,3390 429,3628 C77,3785 336,3964 248,4146 C579,4352 781,4408 634,4665 C320,4804 684,4957 348,5183 C151,5344 335,5481 214,5701 C198,5957 352,6116 422,6220 C437,6301 793,6629 543,6738" fill="none" stroke="url(#fg)" stroke-width="108" stroke-linecap="round" opacity="0.070"/>
+  <path d="M668,0 C790,182 570,273 618,518 C236,783 460,869 185,1037 C594,1119 464,1379 388,1555 C677,1657 763,1813 215,2073 C148,2263 536,2362 334,2592 C95,2841 195,2953 117,3110 C492,3265 463,3456 320,3628 C742,3740 569,3918 705,4146 C314,4352 238,4452 248,4665 C597,4750 364,5107 577,5183 C791,5269 169,5478 368,5701 C741,5949 698,6017 348,6220 C125,6457 559,6584 687,6738" fill="none" stroke="url(#fg)" stroke-width="109" stroke-linecap="round" opacity="0.080"/>
+</svg></div>
+    <div class="safe-zone" style="gap: 16px;">
+      <div class="grid-item" style="grid-area: 1 / 1 / 5 / 13; align-items: start; justify-content: start;">
+<div class="floating-meta pos-top-left"><span>NEXUS PCB</span><span>STUDIO DE CONCEPTION</span></div>
+</div>
+      <div class="grid-item" style="grid-area: 5 / 1 / 9 / 13; align-items: start; justify-content: start;">
+<h1 class="hero-type weight-black" style="font-size: var(--text-scale-5)">LE PCB SE<br>CONÇOIT SOUS<br>VOS YEUX.</h1>
+</div>
+      <div class="grid-item" style="grid-area: 10 / 1 / 13 / 13; align-items: start; justify-content: start;">
+<div class="floating-meta pos-bottom-right"><span>DÉMO LIVE</span><span>2026</span></div>
+</div>
+    </div>
+  </div>
+
+  <div class="page-section archetype-data_dashboard" style="height: 1123px;">
+    <div class="bg-layer" style="position:absolute;inset:0;z-index:1;pointer-events:none;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 794 6738" width="794" height="6738">
+  <defs>
+    <linearGradient id="fg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#844898" stop-opacity="0.05"/>
+      <stop offset="50%" stop-color="#844898" stop-opacity="0.075"/>
+      <stop offset="100%" stop-color="#844898" stop-opacity="0.025"/>
+    </linearGradient>
+  </defs>
+  <path d="M486,0 C516,180 175,360 95,518 C643,591 640,900 254,1037 C270,1139 760,1346 221,1555 C74,1645 673,1918 547,2073 C641,2290 426,2510 509,2592 C301,2773 659,2957 646,3110 C684,3296 559,3361 135,3628 C181,3757 63,3917 347,4146 C80,4273 505,4462 98,4665 C294,4778 212,5094 218,5183 C515,5376 136,5571 400,5701 C130,5848 786,6071 96,6220 C442,6428 669,6617 206,6738" fill="none" stroke="url(#fg)" stroke-width="71" stroke-linecap="round" opacity="0.050"/>
+  <path d="M100,0 C209,188 713,322 280,518 C174,789 405,779 249,1037 C37,1130 498,1437 213,1555 C335,1639 303,1996 678,2073 C420,2338 683,2318 636,2592 C572,2799 426,2887 279,3110 C509,3203 345,3443 496,3628 C757,3874 209,3970 331,4146 C142,4400 691,4448 660,4665 C507,4858 121,5059 371,5183 C428,5410 421,5425 248,5701 C257,5776 738,6119 236,6220 C660,6352 46,6637 436,6738" fill="none" stroke="url(#fg)" stroke-width="107" stroke-linecap="round" opacity="0.060"/>
+  <path d="M134,0 C160,133 790,372 388,518 C348,693 96,805 123,1037 C268,1225 183,1323 563,1555 C56,1752 182,1978 566,2073 C683,2158 189,2449 161,2592 C170,2689 743,2948 381,3110 C375,3338 641,3390 429,3628 C77,3785 336,3964 248,4146 C579,4352 781,4408 634,4665 C320,4804 684,4957 348,5183 C151,5344 335,5481 214,5701 C198,5957 352,6116 422,6220 C437,6301 793,6629 543,6738" fill="none" stroke="url(#fg)" stroke-width="108" stroke-linecap="round" opacity="0.070"/>
+  <path d="M668,0 C790,182 570,273 618,518 C236,783 460,869 185,1037 C594,1119 464,1379 388,1555 C677,1657 763,1813 215,2073 C148,2263 536,2362 334,2592 C95,2841 195,2953 117,3110 C492,3265 463,3456 320,3628 C742,3740 569,3918 705,4146 C314,4352 238,4452 248,4665 C597,4750 364,5107 577,5183 C791,5269 169,5478 368,5701 C741,5949 698,6017 348,6220 C125,6457 559,6584 687,6738" fill="none" stroke="url(#fg)" stroke-width="109" stroke-linecap="round" opacity="0.080"/>
+</svg></div>
+    <div class="safe-zone" style="gap: 16px; inset: 8% 10%;">
+      <div class="page-ghost">02</div>
+      <div class="grid-item" style="grid-area: 1 / 1 / 7 / 7; align-items: stretch; justify-content: start;">
+<div class="glass-canvas" style="width:100%; min-height:100%; box-sizing:border-box; font-size: 13px;"><h3 style="font-size:16px;font-weight:700;margin:20px 0 8px 0;color:var(--c-accent);text-transform:uppercase;letter-spacing:0.05em;">Concevoir à l'aveugle, c'est payer deux fois</h3>
+<p style="margin:0 0 12px 0;line-height:1.7">Aujourd'hui, une carte part chez l'usine avant que quiconque n'ait vu le routage terminé. Le DFM se découvre au retour de l'usine, sous forme de re-spin : trois semaines perdues, un budget englouti, un planning glissant. Entre la netlist et le Gerber, le routeur travaille en boîte noire — personne ne peut dire si la piste critique est passée au bon endroit, ni pourquoi. NEXUS PCB inverse cette logique : la conception devient observable, interruptible et rejouable, du premier placement au dernier&nbsp;via.</p></div>
+</div>
+      <div class="grid-item" style="grid-area: 1 / 7 / 7 / 13; align-items: start; justify-content: start;">
+<div class="stat-block">
+            <div><span class="stat-num">9</span><span class="stat-unit">étapes</span></div>
+            <span class="stat-label">DE LA NETLIST AU FICHIER FABRICANT, AUTOMATISÉES</span>
+        </div>
+</div>
+      <div class="grid-item" style="grid-area: 7 / 1 / 13 / 7; align-items: start; justify-content: start;">
+<div class="stat-block">
+            <div><span class="stat-num">16 000</span><span class="stat-unit">événements</span></div>
+            <span class="stat-label">D'HISTORIQUE DE REPLAY PAR SESSION</span>
+        </div>
+</div>
+    </div>
+  </div>
+
+  <div class="page-section archetype-editorial_flow" style="height: 1123px;">
+    <div class="bg-layer" style="position:absolute;inset:0;z-index:1;pointer-events:none;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 794 6738" width="794" height="6738">
+  <defs>
+    <linearGradient id="fg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#844898" stop-opacity="0.05"/>
+      <stop offset="50%" stop-color="#844898" stop-opacity="0.075"/>
+      <stop offset="100%" stop-color="#844898" stop-opacity="0.025"/>
+    </linearGradient>
+  </defs>
+  <path d="M486,0 C516,180 175,360 95,518 C643,591 640,900 254,1037 C270,1139 760,1346 221,1555 C74,1645 673,1918 547,2073 C641,2290 426,2510 509,2592 C301,2773 659,2957 646,3110 C684,3296 559,3361 135,3628 C181,3757 63,3917 347,4146 C80,4273 505,4462 98,4665 C294,4778 212,5094 218,5183 C515,5376 136,5571 400,5701 C130,5848 786,6071 96,6220 C442,6428 669,6617 206,6738" fill="none" stroke="url(#fg)" stroke-width="71" stroke-linecap="round" opacity="0.050"/>
+  <path d="M100,0 C209,188 713,322 280,518 C174,789 405,779 249,1037 C37,1130 498,1437 213,1555 C335,1639 303,1996 678,2073 C420,2338 683,2318 636,2592 C572,2799 426,2887 279,3110 C509,3203 345,3443 496,3628 C757,3874 209,3970 331,4146 C142,4400 691,4448 660,4665 C507,4858 121,5059 371,5183 C428,5410 421,5425 248,5701 C257,5776 738,6119 236,6220 C660,6352 46,6637 436,6738" fill="none" stroke="url(#fg)" stroke-width="107" stroke-linecap="round" opacity="0.060"/>
+  <path d="M134,0 C160,133 790,372 388,518 C348,693 96,805 123,1037 C268,1225 183,1323 563,1555 C56,1752 182,1978 566,2073 C683,2158 189,2449 161,2592 C170,2689 743,2948 381,3110 C375,3338 641,3390 429,3628 C77,3785 336,3964 248,4146 C579,4352 781,4408 634,4665 C320,4804 684,4957 348,5183 C151,5344 335,5481 214,5701 C198,5957 352,6116 422,6220 C437,6301 793,6629 543,6738" fill="none" stroke="url(#fg)" stroke-width="108" stroke-linecap="round" opacity="0.070"/>
+  <path d="M668,0 C790,182 570,273 618,518 C236,783 460,869 185,1037 C594,1119 464,1379 388,1555 C677,1657 763,1813 215,2073 C148,2263 536,2362 334,2592 C95,2841 195,2953 117,3110 C492,3265 463,3456 320,3628 C742,3740 569,3918 705,4146 C314,4352 238,4452 248,4665 C597,4750 364,5107 577,5183 C791,5269 169,5478 368,5701 C741,5949 698,6017 348,6220 C125,6457 559,6584 687,6738" fill="none" stroke="url(#fg)" stroke-width="109" stroke-linecap="round" opacity="0.080"/>
+</svg></div>
+    <div class="safe-zone" style="gap: 16px; inset: 8% 10%;">
+      <div class="grid-item" style="grid-area: 1 / 1 / 3 / 13; align-items: start; justify-content: start;">
+<h1 class="hero-type weight-thin" style="font-size: var(--text-scale-4)">LE ROUTAGE,<br>EN DIRECT.</h1>
+</div>
+      <div class="grid-item" style="grid-area: 3 / 1 / 7 / 13; align-items: stretch; justify-content: start;">
+<div class="process-list-container"><ul class="process-list"><li class="process-step"><span class="step-num">1</span><div><div class="step-title">Netlist & contraintes</div><div class="step-desc">Trois projets industriels embarqués, contraintes implicites extraites automatiquement.</div></div></li>
+<li class="process-step"><span class="step-num">2</span><div><div class="step-title">Placement RL</div><div class="step-desc">Recuit simulé 12 000 itérations, légalisation sans chevauchement.</div></div></li>
+<li class="process-step"><span class="step-num">3</span><div><div class="step-title">Routage live</div><div class="step-desc">Chaque piste et chaque via diffusés par flux SSE, interruptibles d'un clic.</div></div></li>
+<li class="process-step"><span class="step-num">4</span><div><div class="step-title">Vérification & export</div><div class="step-desc">DRC, DFM sur 100, Gerber RS-274X, Excellon, BOM et POS.</div></div></li>
+</ul></div>
+</div>
+      <div class="grid-item" style="grid-area: 7 / 1 / 13 / 13; align-items: stretch; justify-content: start;">
+<div class="glass-canvas" style="width:100%; min-height:100%; box-sizing:border-box;"><h3 style="font-size:16px;font-weight:700;margin:20px 0 8px 0;color:var(--c-accent);text-transform:uppercase;letter-spacing:0.05em;">Trois piliers, zéro boîte noire</h3>
+<p style="margin:0 0 12px 0;line-height:1.7"><strong>Routage visible.</strong> Chaque piste apparaît en direct, à la vitesse choisie — du ralenti ×0,5 à l'accéléré ×4. <strong>Qualité embarquée.</strong> DRC et DFM usine s'exécutent pendant le routage : le score sur 100 est connu avant l'export, pas après l'usine. <strong>Mémoire partageable.</strong> La session se rejoue sur la timeline seekable et s'exporte en JSON&nbsp;— vos collègues voient exactement ce que le moteur a fait, et&nbsp;pourquoi.</p></div>
+</div>
+    </div>
+  </div>
+
+  <div class="page-section archetype-data_dashboard" style="height: 1123px;">
+    <div class="bg-layer" style="position:absolute;inset:0;z-index:1;pointer-events:none;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 794 6738" width="794" height="6738">
+  <defs>
+    <linearGradient id="fg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#844898" stop-opacity="0.05"/>
+      <stop offset="50%" stop-color="#844898" stop-opacity="0.075"/>
+      <stop offset="100%" stop-color="#844898" stop-opacity="0.025"/>
+    </linearGradient>
+  </defs>
+  <path d="M486,0 C516,180 175,360 95,518 C643,591 640,900 254,1037 C270,1139 760,1346 221,1555 C74,1645 673,1918 547,2073 C641,2290 426,2510 509,2592 C301,2773 659,2957 646,3110 C684,3296 559,3361 135,3628 C181,3757 63,3917 347,4146 C80,4273 505,4462 98,4665 C294,4778 212,5094 218,5183 C515,5376 136,5571 400,5701 C130,5848 786,6071 96,6220 C442,6428 669,6617 206,6738" fill="none" stroke="url(#fg)" stroke-width="71" stroke-linecap="round" opacity="0.050"/>
+  <path d="M100,0 C209,188 713,322 280,518 C174,789 405,779 249,1037 C37,1130 498,1437 213,1555 C335,1639 303,1996 678,2073 C420,2338 683,2318 636,2592 C572,2799 426,2887 279,3110 C509,3203 345,3443 496,3628 C757,3874 209,3970 331,4146 C142,4400 691,4448 660,4665 C507,4858 121,5059 371,5183 C428,5410 421,5425 248,5701 C257,5776 738,6119 236,6220 C660,6352 46,6637 436,6738" fill="none" stroke="url(#fg)" stroke-width="107" stroke-linecap="round" opacity="0.060"/>
+  <path d="M134,0 C160,133 790,372 388,518 C348,693 96,805 123,1037 C268,1225 183,1323 563,1555 C56,1752 182,1978 566,2073 C683,2158 189,2449 161,2592 C170,2689 743,2948 381,3110 C375,3338 641,3390 429,3628 C77,3785 336,3964 248,4146 C579,4352 781,4408 634,4665 C320,4804 684,4957 348,5183 C151,5344 335,5481 214,5701 C198,5957 352,6116 422,6220 C437,6301 793,6629 543,6738" fill="none" stroke="url(#fg)" stroke-width="108" stroke-linecap="round" opacity="0.070"/>
+  <path d="M668,0 C790,182 570,273 618,518 C236,783 460,869 185,1037 C594,1119 464,1379 388,1555 C677,1657 763,1813 215,2073 C148,2263 536,2362 334,2592 C95,2841 195,2953 117,3110 C492,3265 463,3456 320,3628 C742,3740 569,3918 705,4146 C314,4352 238,4452 248,4665 C597,4750 364,5107 577,5183 C791,5269 169,5478 368,5701 C741,5949 698,6017 348,6220 C125,6457 559,6584 687,6738" fill="none" stroke="url(#fg)" stroke-width="109" stroke-linecap="round" opacity="0.080"/>
+</svg></div>
+    <div class="bg-layer" style="position:absolute;inset:0;z-index:2;pointer-events:none;"><svg viewBox="0 0 794 1123" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%"><path d="M 0.0,721.1 C 88.2,638.3 88.2,638.3 264.7,472.8 C 441.1,307.3 352.9,82.7 529.3,224.6 C 705.8,366.5 705.8,673.8 794.0,898.4 " fill="none" stroke="#844898" stroke-width="3" opacity="0.08" />
+<path d="M 0.0,721.1 C 88.2,638.3 88.2,638.3 264.7,472.8 C 441.1,307.3 352.9,82.7 529.3,224.6 C 705.8,366.5 705.8,673.8 794.0,898.4 L 794,1123 L 0,1123 Z" fill="#844898" opacity="0.032" />
+<path d="M 0.0,781.1 C 88.2,698.3 88.2,698.3 264.7,532.8 C 441.1,367.3 352.9,142.7 529.3,284.6 C 705.8,426.5 705.8,733.8 794.0,958.4 " fill="none" stroke="#844898" stroke-width="2" opacity="0.05" />
+<path d="M 0.0,781.1 C 88.2,698.3 88.2,698.3 264.7,532.8 C 441.1,367.3 352.9,142.7 529.3,284.6 C 705.8,426.5 705.8,733.8 794.0,958.4 L 794,1123 L 0,1123 Z" fill="#844898" opacity="0.020000000000000004" />
+<path d="M 0.0,681.1 C 88.2,598.3 88.2,598.3 264.7,432.8 C 441.1,267.3 352.9,42.7 529.3,184.6 C 705.8,326.5 705.8,633.8 794.0,858.4 " fill="none" stroke="#844898" stroke-width="1.5" opacity="0.03" />
+<path d="M 0.0,681.1 C 88.2,598.3 88.2,598.3 264.7,432.8 C 441.1,267.3 352.9,42.7 529.3,184.6 C 705.8,326.5 705.8,633.8 794.0,858.4 L 794,1123 L 0,1123 Z" fill="#844898" opacity="0.012" />
+</svg></div>
+    <div class="safe-zone" style="gap: 16px; inset: 10% 12%;">
+      <div class="grid-item" style="grid-area: 1 / 1 / 5 / 5; align-items: start; justify-content: start;">
+<div class="stat-block">
+            <div><span class="stat-num">93</span><span class="stat-unit">%</span></div>
+            <span class="stat-label">NETS ROUTÉS EN 4 COUCHES — PROJET LE PLUS DENSE</span>
+        </div>
+</div>
+      <div class="grid-item" style="grid-area: 1 / 5 / 5 / 9; align-items: start; justify-content: start;">
+<div class="stat-block">
+            <div><span class="stat-num">0,00</span><span class="stat-unit">mm</span></div>
+            <span class="stat-label">SKEW DE LA PAIRE DIFFÉRENTIELLE USB</span>
+        </div>
+</div>
+      <div class="grid-item" style="grid-area: 1 / 9 / 5 / 13; align-items: start; justify-content: start;">
+<div class="stat-block">
+            <div><span class="stat-num">90</span><span class="stat-unit">/100</span></div>
+            <span class="stat-label">SCORE DFM MESURÉ SUR NEXUS-IOT</span>
+        </div>
+</div>
+      <div class="grid-item" style="grid-area: 5 / 1 / 9 / 5; align-items: start; justify-content: start;">
+<div class="stat-block">
+            <div><span class="stat-num">118</span><span class="stat-unit">contrôles</span></div>
+            <span class="stat-label">AUTOMATISÉS À CHAQUE PUSH</span>
+        </div>
+</div>
+      <div class="grid-item" style="grid-area: 5 / 5 / 9 / 9; align-items: stretch; justify-content: start;">
+<div class="glass-canvas" style="width:100%; min-height:100%; box-sizing:border-box; font-size: 14px;"><h3 style="font-size:16px;font-weight:700;margin:20px 0 8px 0;color:var(--c-accent);text-transform:uppercase;letter-spacing:0.05em;">Ce que cela prouve</h3>
+<p style="margin:0 0 12px 0;line-height:1.7">Chaque valeur provient d'une suite reproductible : la même commande rejoue 85 contrôles moteur et 33 vérifications d'interface en moins d'une minute. Un skew nul, 93 % de nets routés, un DFM de 90 : ce ne sont pas des objectifs marketing, ce sont les dernières mesures d'une chaîne vérifiée à chaque push, bloquante par&nbsp;construction.</p></div>
+</div>
+      <div class="grid-item" style="grid-area: 5 / 9 / 9 / 13; align-items: start; justify-content: start;">
+<hr class="hairline style-accent">
+</div>
+      <div class="grid-item" style="grid-area: 9 / 1 / 13 / 5; align-items: start; justify-content: start;">
+<div class="floating-meta pos-bottom-right"><span>SUITE MOTEUR</span><span>RÉVISION E39921B</span></div>
+</div>
+    </div>
+  </div>
+
+  <div class="page-section archetype-split_vertical" style="height: 1123px;">
+    <div class="bg-layer" style="position:absolute;inset:0;z-index:1;pointer-events:none;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 794 6738" width="794" height="6738">
+  <defs>
+    <linearGradient id="fg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#844898" stop-opacity="0.05"/>
+      <stop offset="50%" stop-color="#844898" stop-opacity="0.075"/>
+      <stop offset="100%" stop-color="#844898" stop-opacity="0.025"/>
+    </linearGradient>
+  </defs>
+  <path d="M486,0 C516,180 175,360 95,518 C643,591 640,900 254,1037 C270,1139 760,1346 221,1555 C74,1645 673,1918 547,2073 C641,2290 426,2510 509,2592 C301,2773 659,2957 646,3110 C684,3296 559,3361 135,3628 C181,3757 63,3917 347,4146 C80,4273 505,4462 98,4665 C294,4778 212,5094 218,5183 C515,5376 136,5571 400,5701 C130,5848 786,6071 96,6220 C442,6428 669,6617 206,6738" fill="none" stroke="url(#fg)" stroke-width="71" stroke-linecap="round" opacity="0.050"/>
+  <path d="M100,0 C209,188 713,322 280,518 C174,789 405,779 249,1037 C37,1130 498,1437 213,1555 C335,1639 303,1996 678,2073 C420,2338 683,2318 636,2592 C572,2799 426,2887 279,3110 C509,3203 345,3443 496,3628 C757,3874 209,3970 331,4146 C142,4400 691,4448 660,4665 C507,4858 121,5059 371,5183 C428,5410 421,5425 248,5701 C257,5776 738,6119 236,6220 C660,6352 46,6637 436,6738" fill="none" stroke="url(#fg)" stroke-width="107" stroke-linecap="round" opacity="0.060"/>
+  <path d="M134,0 C160,133 790,372 388,518 C348,693 96,805 123,1037 C268,1225 183,1323 563,1555 C56,1752 182,1978 566,2073 C683,2158 189,2449 161,2592 C170,2689 743,2948 381,3110 C375,3338 641,3390 429,3628 C77,3785 336,3964 248,4146 C579,4352 781,4408 634,4665 C320,4804 684,4957 348,5183 C151,5344 335,5481 214,5701 C198,5957 352,6116 422,6220 C437,6301 793,6629 543,6738" fill="none" stroke="url(#fg)" stroke-width="108" stroke-linecap="round" opacity="0.070"/>
+  <path d="M668,0 C790,182 570,273 618,518 C236,783 460,869 185,1037 C594,1119 464,1379 388,1555 C677,1657 763,1813 215,2073 C148,2263 536,2362 334,2592 C95,2841 195,2953 117,3110 C492,3265 463,3456 320,3628 C742,3740 569,3918 705,4146 C314,4352 238,4452 248,4665 C597,4750 364,5107 577,5183 C791,5269 169,5478 368,5701 C741,5949 698,6017 348,6220 C125,6457 559,6584 687,6738" fill="none" stroke="url(#fg)" stroke-width="109" stroke-linecap="round" opacity="0.080"/>
+</svg></div>
+    <div class="safe-zone" style="gap: 16px; inset: 10% 12%;">
+      <div class="grid-item" style="grid-area: 1 / 1 / 10 / 7; align-items: stretch; justify-content: start;">
+<div class="glass-canvas" style="width:100%; min-height:100%; box-sizing:border-box;"><h3 style="font-size:16px;font-weight:700;margin:20px 0 8px 0;color:var(--c-accent);text-transform:uppercase;letter-spacing:0.05em;">Pas un fichier de plus : une scène</h3>
+<p style="margin:0 0 12px 0;line-height:1.7">Les outils classiques rendent un résultat. NEXUS PCB rend un processus. Vous voyez le routeur hésiter, riper, recommencer ; vous intervenez d'un nudge pendant qu'il travaille, vous annulez, vous rejouez. La timeline seekable rejoue la session comme un enregistrement sportif, et un bouton l'exporte en JSON — rejouable ailleurs, joignable à un devis. Livrer une carte devient raconter une&nbsp;conception.</p></div>
+</div>
+      <div class="grid-item" style="grid-area: 10 / 1 / 13 / 7; align-items: start; justify-content: start;">
+<div class="stat-block">
+            <div><span class="stat-num">×4</span><span class="stat-unit"></span></div>
+            <span class="stat-label">VITESSE DE LECTURE RÉGLABLE EN PLEIN VOL</span>
+        </div>
+</div>
+      <div class="grid-item" style="grid-area: 1 / 7 / 13 / 13; align-items: start; justify-content: start;">
+<div class="floating-meta pos-top-right"><span>DIFFÉRENCIATION</span><span>05</span></div>
+</div>
+    </div>
+  </div>
+
+  <div class="page-section archetype-cover_hero" style="height: 1123px;">
+    <div class="bg-layer" style="position:absolute;inset:0;z-index:1;pointer-events:none;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 794 6738" width="794" height="6738">
+  <defs>
+    <linearGradient id="fg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#844898" stop-opacity="0.05"/>
+      <stop offset="50%" stop-color="#844898" stop-opacity="0.075"/>
+      <stop offset="100%" stop-color="#844898" stop-opacity="0.025"/>
+    </linearGradient>
+  </defs>
+  <path d="M486,0 C516,180 175,360 95,518 C643,591 640,900 254,1037 C270,1139 760,1346 221,1555 C74,1645 673,1918 547,2073 C641,2290 426,2510 509,2592 C301,2773 659,2957 646,3110 C684,3296 559,3361 135,3628 C181,3757 63,3917 347,4146 C80,4273 505,4462 98,4665 C294,4778 212,5094 218,5183 C515,5376 136,5571 400,5701 C130,5848 786,6071 96,6220 C442,6428 669,6617 206,6738" fill="none" stroke="url(#fg)" stroke-width="71" stroke-linecap="round" opacity="0.050"/>
+  <path d="M100,0 C209,188 713,322 280,518 C174,789 405,779 249,1037 C37,1130 498,1437 213,1555 C335,1639 303,1996 678,2073 C420,2338 683,2318 636,2592 C572,2799 426,2887 279,3110 C509,3203 345,3443 496,3628 C757,3874 209,3970 331,4146 C142,4400 691,4448 660,4665 C507,4858 121,5059 371,5183 C428,5410 421,5425 248,5701 C257,5776 738,6119 236,6220 C660,6352 46,6637 436,6738" fill="none" stroke="url(#fg)" stroke-width="107" stroke-linecap="round" opacity="0.060"/>
+  <path d="M134,0 C160,133 790,372 388,518 C348,693 96,805 123,1037 C268,1225 183,1323 563,1555 C56,1752 182,1978 566,2073 C683,2158 189,2449 161,2592 C170,2689 743,2948 381,3110 C375,3338 641,3390 429,3628 C77,3785 336,3964 248,4146 C579,4352 781,4408 634,4665 C320,4804 684,4957 348,5183 C151,5344 335,5481 214,5701 C198,5957 352,6116 422,6220 C437,6301 793,6629 543,6738" fill="none" stroke="url(#fg)" stroke-width="108" stroke-linecap="round" opacity="0.070"/>
+  <path d="M668,0 C790,182 570,273 618,518 C236,783 460,869 185,1037 C594,1119 464,1379 388,1555 C677,1657 763,1813 215,2073 C148,2263 536,2362 334,2592 C95,2841 195,2953 117,3110 C492,3265 463,3456 320,3628 C742,3740 569,3918 705,4146 C314,4352 238,4452 248,4665 C597,4750 364,5107 577,5183 C791,5269 169,5478 368,5701 C741,5949 698,6017 348,6220 C125,6457 559,6584 687,6738" fill="none" stroke="url(#fg)" stroke-width="109" stroke-linecap="round" opacity="0.080"/>
+</svg></div>
+    <div class="safe-zone" style="gap: 16px;">
+      <div class="grid-item" style="grid-area: 1 / 1 / 5 / 13; align-items: start; justify-content: start;">
+<div class="floating-meta pos-top-left"><span>NEXUS PCB</span><span>DÉMONSTRATION SUR VOS PROJETS</span></div>
+</div>
+      <div class="grid-item" style="grid-area: 5 / 1 / 9 / 13; align-items: start; justify-content: start;">
+<h1 class="hero-type weight-black" style="font-size: var(--text-scale-5)">VOYEZ LE<br>ROUTAGE.<br>EN DIRECT.</h1>
+</div>
+      <div class="grid-item" style="grid-area: 10 / 1 / 13 / 13; align-items: start; justify-content: start;">
+<div class="floating-meta pos-bottom-right"><span>DEMANDEZ VOTRE DÉMO</span><span>2026</span></div>
+</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

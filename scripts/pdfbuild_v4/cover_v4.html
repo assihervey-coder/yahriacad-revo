@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Noto+Serif+SC:wght@400;700;900&family=Inter:wght@300;400;500&family=Noto+Sans+SC:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    @page { size: 794px 1123px; margin: 0; }
+    :root {
+      --c-bg: #0a1628;        /* nuit bleue profonde */
+      --c-accent: #4da8da;    /* bleu lumineux */
+      --c-text: #e8f0f8;      /* blanc froid */
+      --c-muted: #7a9bb8;     /* bleu-gris */
+      --c-glow: #2d7ab3;      /* bleu médian (source des halos) */
+    }
+    html, body {
+      margin: 0; padding: 0;
+      width: 794px; height: 1123px;
+      background: var(--c-bg);
+      color: var(--c-text);
+      font-family: 'Inter', 'Liberation Sans', 'Noto Sans SC', sans-serif;
+    }
+    @media screen {
+      html { height: auto; display: flex; justify-content: center; min-height: 100vh; background: var(--c-bg); }
+      body { transform-origin: top center; scale: min(1, calc(100vw / 794), calc(100vh / 1123)); margin: 0 auto; box-shadow: 0 0 60px rgba(0,0,0,0.4); }
+    }
+    .cover { width: 794px; height: 1123px; position: relative; border: none; outline: none; box-shadow: none; }
+
+    /* Layer 1 — halos discrets (6-8 %), contenus dans la page */
+    .bg-layer { position: absolute; inset: 0; overflow: hidden; z-index: 1; }
+    .glow-a {
+      position: absolute; left: 0; top: 0; width: 70%; height: 46%;
+      background: radial-gradient(circle at 22% 26%, rgba(45,122,179,0.10), rgba(45,122,179,0.0) 62%);
+    }
+    .glow-b {
+      position: absolute; right: 0; bottom: 0; width: 78%; height: 54%;
+      background: radial-gradient(circle at 78% 76%, rgba(45,122,179,0.09), rgba(45,122,179,0.0) 64%);
+    }
+
+    /* Layer 2 — cadre lumineux continu */
+    .frame {
+      position: absolute; z-index: 2;
+      left: 60px; right: 60px; top: 80px; bottom: 80px;
+      border: 2px solid var(--c-accent);
+      pointer-events: none;
+    }
+
+    /* Layer 3 — contenu (X = 110 px : 50 px d'écart au cadre) */
+    .content { position: absolute; inset: 0; z-index: 3; }
+    .kicker {
+      position: absolute; left: 110px; top: 135px;
+      font-size: 11pt; font-weight: 300;
+      color: var(--c-accent);
+      letter-spacing: 5px; text-transform: uppercase;
+    }
+    .hero {
+      position: absolute; left: 110px; top: 236px;
+      font-family: 'Playfair Display', 'FreeSerif', 'Noto Serif SC', serif;
+      font-size: 50pt; font-weight: 900; line-height: 1.15;
+      color: var(--c-text);
+      text-shadow: 0 0 26px rgba(77,168,218,0.30);
+      max-width: 560px;
+    }
+    .summary {
+      position: absolute; left: 110px; top: 505px;
+      font-size: 15pt; font-weight: 300; line-height: 1.7;
+      color: var(--c-muted);
+      max-width: 520px;
+    }
+    .org {
+      position: absolute; left: 110px; top: 719px;
+      font-size: 18pt; font-weight: 400;
+      color: var(--c-text);
+    }
+    .org-sub {
+      position: absolute; left: 110px; top: 762px;
+      font-size: 11pt; font-weight: 300;
+      color: var(--c-muted);
+      letter-spacing: 1px;
+    }
+    .date {
+      position: absolute; left: 110px; bottom: 132px;
+      font-size: 10pt; font-weight: 300;
+      color: var(--c-muted);
+      letter-spacing: 3px; text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <div class="bg-layer">
+      <div class="glow-a"></div>
+      <div class="glow-b"></div>
+    </div>
+    <div class="frame"></div>
+    <div class="content">
+      <div class="kicker">Audit technique de complétude — Version 4</div>
+      <div class="hero">NEXUS<br>PCB</div>
+      <div class="summary">Quatrième édition de la revue de complétude&nbsp;: gouvernance qualité devenue bloquante, routage à quatre couches et paires différentielles vérifiés par 118 contrôles automatisés. Score consolidé&nbsp;: 93 sur 100.</div>
+      <div class="org">Studio d'ingénierie NEXUS</div>
+      <div class="org-sub">Plateforme de conception PCB par IA — Next.js, TypeScript, moteur d'agents</div>
+      <div class="date">09.09.2026&nbsp;&nbsp;·&nbsp;&nbsp;Révision e39921b</div>
+    </div>
+  </div>
+</body>
+</html>
