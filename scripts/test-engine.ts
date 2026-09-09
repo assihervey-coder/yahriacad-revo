@@ -16,6 +16,7 @@ import { solveThermal } from '../src/lib/engine/simulator'
 import { routeAll } from '../src/lib/engine/router'
 import { runDfm, runDrc } from '../src/lib/engine/drc'
 import { generateGerber } from '../src/lib/engine/gerber'
+import { buildOdbJob, buildTar } from '../src/lib/engine/odb'
 import { DEFAULT_RULES } from '../src/lib/engine/rules'
 
 let failures = 0
@@ -108,6 +109,35 @@ for (const nl of NETLISTS) {
   assert(gtl.content.includes('D03'), 'Gerber : flashes de pads présents')
   const drill = gerber.files.find((f) => f.name === 'drill.drl')!
   assert(drill.content.includes('M48'), 'Excellon : en-tête M48')
+
+  // ---- P2.1 — Gerber X2 (attributs) + package ODB++ ----
+  assert(gtl.content.includes('%TF.GenerationSoftware,NEXUS PCB,Studio,1.0*%'), 'Gerber X2 : TF.GenerationSoftware')
+  assert(gtl.content.includes('%TF.FileFunction,Copper,L1,Top*%'), 'Gerber X2 : TF.FileFunction cuivre top')
+  assert(gtl.content.includes(`%TF.ProjectId,${nl.id.replace(/[^A-Za-z0-9_.\-+/!]/g, '_')}*%`), 'Gerber X2 : TF.ProjectId')
+  assert(gtl.content.includes('%TO.N,'), 'Gerber X2 : attributs %TO.N par net')
+  assert(gtl.content.includes('%TO.C,'), 'Gerber X2 : attributs %TO.C par composant')
+  const hasVias = routing.routes.some((r) => r.vias.length > 0)
+  assert(!hasVias || gtl.content.includes('%TO.V*%'), 'Gerber X2 : attribut %TO.V sur vias')
+  const edge = gerber.files.find((f) => f.name === 'Edge_Cuts.gbr')!
+  assert(edge.content.includes('%TF.FileFunction,Profile,NP*%'), 'Gerber X2 : contour Profile,NP')
+
+  const odb = buildOdbJob(nl, ratchet.placements, routing)
+  assert(odb.files.length >= 2 * odb.layerNames.length + 4, `ODB++ : ${odb.files.length} fichiers (${odb.layerNames.length} couches + outline/drill/netlist/matrix)`)
+  const tar = buildTar(odb.files)
+  assert(tar.length % 512 === 0, 'ODB++ : archive tar alignée 512 o')
+  assert(tar[257] === 0x75 && tar[258] === 0x73 && tar[259] === 0x74 && tar[260] === 0x61 && tar[261] === 0x72, 'ODB++ : magie ustar présente (offset 257)')
+  const matrix = odb.files.find((f) => f.path.endsWith('matrix/matrix'))!
+  assert(matrix.content.includes('NAME=f_cu') && matrix.content.includes('TYPE=SIGNAL'), 'ODB++ : matrix déclare les couches cuivre')
+  const odbNetlist = odb.files.find((f) => f.path.endsWith('steps/step/netlist'))!
+  const knownNet = routing.routes[0]?.net ?? ''
+  assert(knownNet !== '' && odbNetlist.content.includes(`NETNAME=${knownNet.replace(/[^A-Za-z0-9_.\-+/]/g, '_')}`), 'ODB++ : netlist contient les nets routés')
+  const odbDrill = odb.files.find((f) => f.path.endsWith('layers/drill/drill'))
+  assert(!!odbDrill === hasVias, 'ODB++ : perçage présent si et seulement si des vias')
+  if (odbDrill) {
+    assert(odbDrill.content.includes('UNITS=UM') && /TOOL T1 C=\d+/.test(odbDrill.content), 'ODB++ : drill avec outils métriques')
+  }
+  const odbLines = odb.files.find((f) => f.path.endsWith('layers/f_cu/lines'))!
+  assert(/^L \d+ \d+ \d+ \d+ r\d+$/m.test(odbLines.content), 'ODB++ : enregistrements L (pistes) en µm')
 }
 
 /* ============ [P1.1] Pile 4 couches — signal/signal/masse/alim ============ */

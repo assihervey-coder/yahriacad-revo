@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Bot, CheckCircle2, Download, FileDown, Gauge, GitCompare, Repeat, ShieldCheck,
+  Bot, CheckCircle2, Download, FileDown, Gauge, GitCompare, Package, Repeat, ShieldCheck,
   Thermometer, TriangleAlert, X, Zap,
 } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
@@ -102,6 +102,9 @@ export function RightPanel() {
       .catch(() => { if (alive) setComparison(null) })
     return () => { alive = false }
   }, [selA, selB])
+
+  // Export ODB++ en cours (compression tar+gz async)
+  const [odbBusy, setOdbBusy] = useState(false)
 
   return (
     <Tabs defaultValue="pipeline" className="flex h-full flex-col gap-0">
@@ -477,10 +480,37 @@ export function RightPanel() {
               >
                 <Download className="h-3.5 w-3.5" /> Tout télécharger ({gerber.files.length} fichiers)
               </Button>
+              {/* ---------- Package ODB++ (.tgz) [audit P2.1] ---------- */}
+              <Button
+                variant="outline"
+                disabled={odbBusy || !result.placement || !result.routing}
+                className="w-full gap-2 border-sky-700 bg-sky-950/30 text-xs text-sky-300 hover:bg-sky-900/40"
+                onClick={async () => {
+                  setOdbBusy(true)
+                  try {
+                    const { buildOdbJob, tarGzBlob } = await import('@/lib/engine/odb')
+                    const job = buildOdbJob(netlist, result.placement!.placements, result.routing!)
+                    const blob = await tarGzBlob(job.files)
+                    const a = document.createElement('a')
+                    a.href = URL.createObjectURL(blob)
+                    a.download = `${job.jobName}_odbpp.tgz`
+                    a.click()
+                    URL.revokeObjectURL(a.href)
+                    useStudio.getState().log('system', 'agent',
+                      `[ODB++] Package exporté — ${job.files.length} fichiers (matrix, outline, ${job.layerNames.join('/')} + drill, netlist), ${job.stats.lines} pistes · ${job.stats.pads} pads · ${job.stats.vias} vias · ${job.stats.drills} perçages`)
+                  } finally {
+                    setOdbBusy(false)
+                  }
+                }}
+                data-testid="export-odb"
+              >
+                <Package className="h-3.5 w-3.5" /> {odbBusy ? 'Compression…' : 'Package ODB++ (.tgz)'}
+              </Button>
               <p className="text-[9px] leading-relaxed text-neutral-600">
-                Fichiers RS-274X (format 3.6, mm) + perçage Excellon + BOM/Pick&amp;Place + pinmap firmware
-                (.h / overlay Zephyr / JSON) — directement exploitables par PCBWay, JLCPCB, ou importables
-                dans KiCad pour vérification.
+                Gerber X2 (RS-274X + attributs nets/composants/vias — rétrocompatible X1, format 3.6, mm) +
+                perçage Excellon + BOM/Pick&amp;Place + pinmap firmware + package ODB++ ASCII
+                (matrix, outline, couches lignes/pads, drill, netlist — sous-set, plans cuivre dans les .gbr) —
+                exploitables par PCBWay, JLCPCB, Valor, ou importables dans KiCad pour vérification.
               </p>
             </>
           ) : (

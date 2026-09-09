@@ -3,10 +3,15 @@
  * Équivalent : services/exporter/gerber_generator/ + odb_generator/ + bom_assembly/
  *
  * Génère de VRAIS fichiers exploitables par une usine :
- *   - F_Cu.gbr / B_Cu.gbr : cuivres RS-274X (format 3.6, mm)
- *   - Edge_Cuts.gbr       : contour de carte
+ *   - F_Cu.gbr / B_Cu.gbr : cuivres Gerber X2 (RS-274X + attributs [P2.1], format 3.6, mm)
+ *   - Edge_Cuts.gbr       : contour de carte (Profile,NP)
  *   - drill.drl           : perçage Excellon
  *   - BOM.csv / POS.csv   : nomenclature + pick & place
+ *   + package ODB++ (.tgz) dans ./odb [P2.1]
+ *
+ * Attributs X2 émis : TF.GenerationSoftware / CreationDate / ProjectId /
+ * FileFunction / Part + TO.N (net) par objet, TO.C (designator) par composant,
+ * TO.V (via) — 100 % rétrocompatibles X1 (les lecteurs anciens les ignorent).
  */
 import type { GerberFile, GerberPackage, Netlist, PlacedComponent, RoutingSolution } from './types'
 import { padWorldPos, placedRect } from './world-model'
@@ -15,17 +20,29 @@ import { padWorldPos, placedRect } from './world-model'
 const S = 1e6
 const fmt = (mm: number) => String(Math.round(mm * S))
 
-function gerberHeader(): string {
-  return [
+/** Assainit un nom pour les attributs X2 (ASCII, pas de , ni *). */
+const x2name = (s: string) => s.replace(/[^A-Za-z0-9_.\-+/!]/g, '_')
+
+function gerberHeader(opts?: { fileFunction?: string; projectId?: string }): string {
+  const lines = [
     'G04 NEXUS PCB — Design autonome par agents IA*',
     'G04 Généré le ' + new Date().toISOString() + '*',
     '%FSLAX36Y36*%',
     '%MOMM*%',
-    '%LPD*%',
-    'G01*',
-    'G75*',
-    '',
-  ].join('\n')
+  ]
+  // --- Attributs X2 globaux [P2.1] ---
+  if (opts?.projectId) {
+    lines.push('%TF.GenerationSoftware,NEXUS PCB,Studio,1.0*%')
+    lines.push(`%TF.CreationDate,${new Date().toISOString()}*%`)
+    lines.push(`%TF.ProjectId,${x2name(opts.projectId)}*%`)
+    lines.push('%TF.Part,Single*%')
+  }
+  if (opts?.fileFunction) lines.push(`%TF.FileFunction,${opts.fileFunction}*%`)
+  lines.push('%LPD*%')
+  lines.push('G01*')
+  lines.push('G75*')
+  lines.push('')
+  return lines.join('\n')
 }
 
 function gerberFooter(): string {
@@ -65,7 +82,8 @@ export function generateGerber(
   const traceCount = routing.routes.reduce((a, r) => a + r.segments.length, 0)
 
   const copperLayer = (layer: number): string => {
-    const lines: string[] = [gerberHeader()]
+    const pos = layer === 0 ? 'Top' : layer === (nl.board.layers >= 4 ? 3 : 1) ? 'Bot' : 'Inr'
+    const lines: string[] = [gerberHeader({ projectId: nl.id, fileFunction: `Copper,L${layer + 1},${pos}` })]
     // Apertures (pistes + vias)
     for (const { def, d } of copperApertures.values()) {
       lines.push(`%ADD${d}${def}*%`)
@@ -89,21 +107,28 @@ export function generateGerber(
       padD.set(key, d)
       lines.push(`%ADD${d}R,${sh.w}X${sh.h}X${sh.rot}*%`)
     }
-    // Sélection + dessins
-    // Sélection + dessins des pistes
-    for (const [key, { d }] of copperApertures) {
-      if (!key.startsWith('C:')) continue
-      lines.push(`D${d}*`)
-      for (const r of routing.routes) {
-        for (const seg of r.segments) {
-          if (seg.layer !== layer) continue
-          if (Math.round(seg.width * 100) / 100 !== Number(key.split(':')[1])) continue
-          lines.push(...drawPolyline(seg.pts))
+    // Sélection + dessins des pistes — regroupées PAR NET pour porter
+    // l'attribut X2 %TO.N sur chaque objet de net (%TD referme).
+    lines.push('G04 pistes*')
+    for (const r of routing.routes) {
+      if (!r.segments.some((s) => s.layer === layer)) continue
+      lines.push(`%TO.N,${x2name(r.net)}*%`)
+      let cur = -1
+      for (const seg of r.segments) {
+        if (seg.layer !== layer) continue
+        const key = `C:${Math.round(seg.width * 100) / 100}`
+        const d = copperApertures.get(key)!.d
+        if (d !== cur) {
+          lines.push(`D${d}*`)
+          cur = d
         }
+        lines.push(...drawPolyline(seg.pts))
       }
+      lines.push('%TD*%')
     }
     for (const p of placements) {
       const c = compByRef.get(p.ref)!
+      lines.push(`%TO.C,${x2name(p.ref)}*%`)
       for (const pd of c.footprint.pads) {
         const netName = c.pins[pd.pin]
         if (!netName || layer !== 0) continue
@@ -112,16 +137,20 @@ export function generateGerber(
         const d = padD.get(key)!
         const w = padWorldPos(p, pd)
         lines.push(`D${d}*`)
+        lines.push(`%TO.N,${x2name(netName)}*%`)
         lines.push(`X${fmt(w.x)}Y${fmt(w.y)}D03*`)
         padCount++
       }
+      lines.push('%TD*%')
     }
-    // Vias (flashes circulaires sur les 2 couches)
+    // Vias (flashes circulaires sur les couches externes) — attribut X2 .V
     const viaD = dOf(`V:${viaRingDiameter}`, `C,${viaRingDiameter}`)
     lines.push(`D${viaD}*`)
+    lines.push('%TO.V*%')
     for (const r of routing.routes) {
       for (const v of r.vias) lines.push(`X${fmt(v.x)}Y${fmt(v.y)}D03*`)
     }
+    lines.push('%TD*%')
     // Pour cuivre : plan de masse synthétique (2 couches) ou plans dédiés (4 couches [P1.1])
     const pours: { cells: { x: number; y: number }[]; cols: number; rows: number; res: number }[] = []
     if (routing.groundPour) {
@@ -153,7 +182,7 @@ export function generateGerber(
 
   /* ---------- Contour ---------- */
   const outline = [
-    gerberHeader(),
+    gerberHeader({ projectId: nl.id, fileFunction: 'Profile,NP' }),
     '%ADD20C,0.15*%',
     'D20*',
     `X${fmt(0)}Y${fmt(0)}D02*`,
