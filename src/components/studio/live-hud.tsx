@@ -10,8 +10,27 @@
  * et TIMELINE seekable : scrub, avance, recul, pause — dans la session.
  */
 import { useEffect, useRef, useState } from 'react'
-import { Pause, Play, RotateCcw, SkipBack, SkipForward, Square } from 'lucide-react'
+import { ChevronDown, ChevronUp, Pause, Play, RotateCcw, SkipBack, SkipForward, Square } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
+
+/* [audit P0.1] Les conteneurs du HUD sont TRAVERSAUX aux événements pointeur
+ * (pointer-events-none) — seuls les contrôles récupèrent les clics (auto).
+ * L'arrière-plan et les libellés laissent passer les gestes vers la carte :
+ * on peut saisir/dragger un composant sous le HUD. Repli compact : une pilule
+ * minimale (auto sur fenêtre contrainte, bascule manuelle sinon). */
+
+function CollapseButton({ compact, onToggle }: { compact: boolean; onToggle: () => void }) {
+  return (
+    <button
+      data-testid={compact ? 'hud-expand' : 'hud-collapse'}
+      onClick={onToggle}
+      title={compact ? 'Déplier le HUD (timeline, vitesse, détails)' : 'Replier le HUD en pilule — libère la carte sous le HUD'}
+      className="pointer-events-auto rounded p-0.5 text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
+    >
+      {compact ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+    </button>
+  )
+}
 
 const PHASE_LABEL: Record<string, string> = {
   greedy: 'Routeur A* — pose des pistes, trait par trait',
@@ -32,7 +51,7 @@ const SPEED_TITLE: Record<number, string> = {
 
 function SpeedSelector({ liveSpeed, setLiveSpeed }: { liveSpeed: number; setLiveSpeed: (v: number) => void }) {
   return (
-    <div className="flex gap-0.5">
+    <div className="pointer-events-auto flex gap-0.5">
       {SPEEDS.map((v) => (
         <button
           key={v}
@@ -87,7 +106,7 @@ function ReplayTimeline() {
   }
   return (
     <div className="mt-2 border-t border-sky-900/40 pt-2">
-      <div className="flex items-center gap-1" data-testid="replay-timeline">
+      <div className="pointer-events-auto flex items-center gap-1" data-testid="replay-timeline">
         <button className={transportCls} title="Retour au début de la session" onClick={() => onScrub(0)}>
           <SkipBack className="h-3 w-3" />
         </button>
@@ -134,26 +153,54 @@ export function LiveRoutingHud() {
   const stopLiveRouting = useStudio((s) => s.stopLiveRouting)
   const canReplay = useStudio((s) => s.canReplay)
   const replayLastRouting = useStudio((s) => s.replayLastRouting)
+  const replayTotal = useStudio((s) => s.replayTotal)
+
+  /* Repli compact — automatique sur fenêtre contrainte [audit P0.1],
+   * bascule manuelle via le chevron sinon. */
+  const [compact, setCompact] = useState(false)
+  useEffect(() => {
+    if (window.innerHeight < 560 || window.innerWidth < 640) setCompact(true)
+  }, [])
 
   /* ---------- Hors flux : barre replay de la dernière session ---------- */
   if (!live.active) {
     if (!canReplay) return null
+    if (compact) {
+      return (
+        <div data-testid="replay-bar" className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2">
+          <div className="flex items-center gap-1.5 rounded-full border border-violet-800/60 bg-black/85 px-2.5 py-1 shadow-[0_0_18px_rgba(139,92,246,0.18)] backdrop-blur">
+            <button
+              onClick={replayLastRouting}
+              title="Rejouer la dernière session de routage — vitesse réglable pendant la lecture"
+              className="pointer-events-auto flex items-center gap-1 rounded-full border border-violet-700/60 bg-violet-950/40 px-2 py-0.5 text-[10px] font-bold tracking-wide text-violet-300 transition-colors hover:bg-violet-900/40"
+            >
+              <RotateCcw className="h-3 w-3" /> REPLAY
+            </button>
+            <span className="font-mono text-[9px] text-neutral-500">{replayTotal} évts</span>
+            <CollapseButton compact onToggle={() => setCompact(false)} />
+          </div>
+        </div>
+      )
+    }
     return (
       <div
         data-testid="replay-bar"
-        className="absolute left-1/2 top-3 z-10 w-80 -translate-x-1/2 rounded-lg border border-violet-800/60 bg-black/85 px-3 py-2 shadow-[0_0_24px_rgba(139,92,246,0.18)] backdrop-blur"
+        className="pointer-events-none absolute left-1/2 top-3 z-10 w-80 -translate-x-1/2 rounded-lg border border-violet-800/60 bg-black/85 px-3 py-2 shadow-[0_0_24px_rgba(139,92,246,0.18)] backdrop-blur"
       >
         <div className="flex items-center gap-2">
           <button
             onClick={replayLastRouting}
             title="Rejouer la dernière session de routage, trait par trait — vitesse réglable avant et pendant la lecture"
-            className="flex items-center gap-1.5 rounded border border-violet-700/60 bg-violet-950/40 px-2 py-0.5 text-[11px] font-bold tracking-wide text-violet-300 transition-colors hover:bg-violet-900/40"
+            className="pointer-events-auto flex items-center gap-1.5 rounded border border-violet-700/60 bg-violet-950/40 px-2 py-0.5 text-[11px] font-bold tracking-wide text-violet-300 transition-colors hover:bg-violet-900/40"
           >
             <RotateCcw className="h-3 w-3" /> REPLAY
           </button>
           <span className="text-[10px] text-neutral-500">dernière session · vitesse</span>
           <div className="border-l border-neutral-800 pl-2">
             <SpeedSelector liveSpeed={liveSpeed} setLiveSpeed={setLiveSpeed} />
+          </div>
+          <div className="ml-auto">
+            <CollapseButton compact={false} onToggle={() => setCompact(true)} />
           </div>
         </div>
         {/* Timeline seekable : scrubber dans la session sans la relancer */}
@@ -165,10 +212,35 @@ export function LiveRoutingHud() {
   const pct = live.netsTotal > 0 ? Math.min(100, Math.round((live.netsDone / live.netsTotal) * 100)) : 0
   const sourceLabel = live.source === 'server' ? 'FLUX SERVEUR' : live.source === 'replay' ? 'REPLAY' : 'MOTEUR LOCAL'
 
+  /* Pilule compacte : l'essentiel (état, progression, arrêt) tient sur une ligne */
+  if (compact) {
+    return (
+      <div data-testid="live-routing-hud" className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2">
+        <div className="flex items-center gap-1.5 rounded-full border border-sky-800/60 bg-black/85 px-2.5 py-1 shadow-[0_0_18px_rgba(56,189,248,0.15)] backdrop-blur">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500" />
+          </span>
+          <span className="text-[10px] font-bold tracking-wide text-sky-300">
+            {live.source === 'replay' ? 'REPLAY' : 'LIVE'} · {pct}%
+          </span>
+          <CollapseButton compact onToggle={() => setCompact(false)} />
+          <button
+            onClick={() => stopLiveRouting()}
+            title="Interrompre le flux de routage"
+            className="pointer-events-auto flex items-center rounded-full border border-red-800/60 bg-red-950/40 px-1.5 py-0.5 text-[10px] text-red-300 transition-colors hover:bg-red-900/40"
+          >
+            <Square className="h-2.5 w-2.5" />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       data-testid="live-routing-hud"
-      className="absolute left-1/2 top-3 z-10 w-72 -translate-x-1/2 rounded-lg border border-sky-800/60 bg-black/85 p-3 shadow-[0_0_24px_rgba(56,189,248,0.15)] backdrop-blur"
+      className="pointer-events-none absolute left-1/2 top-3 z-10 w-72 -translate-x-1/2 rounded-lg border border-sky-800/60 bg-black/85 p-3 shadow-[0_0_24px_rgba(56,189,248,0.15)] backdrop-blur"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-[11px] font-bold tracking-wide text-sky-300">
@@ -178,13 +250,16 @@ export function LiveRoutingHud() {
           </span>
           ROUTAGE LIVE <span className="text-[9px] font-medium text-sky-600">· {sourceLabel}</span>
         </div>
-        <button
-          onClick={() => stopLiveRouting()}
-          title="Interrompre le flux de routage"
-          className="flex items-center gap-1 rounded border border-red-800/60 bg-red-950/40 px-1.5 py-0.5 text-[10px] text-red-300 transition-colors hover:bg-red-900/40"
-        >
-          <Square className="h-2.5 w-2.5" /> interrompre
-        </button>
+        <div className="flex items-center gap-1">
+          <CollapseButton compact={false} onToggle={() => setCompact(true)} />
+          <button
+            onClick={() => stopLiveRouting()}
+            title="Interrompre le flux de routage"
+            className="pointer-events-auto flex items-center gap-1 rounded border border-red-800/60 bg-red-950/40 px-1.5 py-0.5 text-[10px] text-red-300 transition-colors hover:bg-red-900/40"
+          >
+            <Square className="h-2.5 w-2.5" /> interrompre
+          </button>
+        </div>
       </div>
 
       <div className="mt-1 text-[10px] text-neutral-400">{PHASE_LABEL[live.phase] ?? live.phase}</div>

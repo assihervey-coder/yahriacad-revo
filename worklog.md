@@ -186,3 +186,22 @@ Stage Summary:
 - Audit livré : /home/z/my-project/download/Audit_technique_completude_NEXUS_PCB.pdf (couverture + sommaire + 9 chapitres, 5 tableaux, 2 figures).
 - Verdict de l'audit : complétude globale 86/100 — chaîne de conception intégralement fonctionnelle, expérience temps réel différenciante, écarts concentrés sur ODB++/multicouche/collaboratif.
 - Sources réutilisables : scripts/pdfbuild/{cover.html, make_charts.py, audit_content.py, build_audit.py, merge_final.py}.
+
+---
+Task ID: 9
+Agent: Super Z (agent principal)
+Task: Traiter le P0.1 de l'audit — HUD et barre replay traversants aux événements pointeur + repli compact — puis commit + push.
+
+Work Log:
+- Traversée pointeur [audit P0.1] : les DEUX conteneurs (HUD live, barre replay) passent en pointer-events-none ; seuls les contrôles récupèrent pointer-events-auto — bouton REPLAY, sélecteur de vitesse (racine), rangée interactive de la timeline (transport + slider), bouton « interrompre », chevrons replier/déplier. Libellés, barre de progression, légendes et marges laissent maintenant passer clics et drags vers la carte : on peut saisir un composant SOUS le HUD (scenario d'audit impossible avant).
+- Repli compact : composant CollapseButton partagé (data-testid hud-collapse/hud-expand) ; pilules compactes d'une ligne — HUD actif « LIVE/REPLAY · N% » (143-161 × 26 px contre 288×270 déplié, ~95 % de surface en moins) avec arrêt conservé ; barre replay compacte « REPLAY · N évts » avec lecture directe. Repli AUTOMATIQUE au montage si window.innerHeight < 560 ou innerWidth < 640 (la config d'audit 626×227 s'ouvre donc déjà repliée), bascule manuelle par chevron sinon ; l'état compact persiste entre les sessions HUD/barre (comportement voulu).
+- E2E navigateur (desktop 1440×900 ET config d'audit 626×227) :
+  * elementFromPoint : fond de barre replay et fond de HUD actif → canvas (#board-viewer) — traversée confirmée ; REPLAY, ×2, ×0.5, slider timeline toujours ciblés et fonctionnels (sélection de vitesse, lancement, pause).
+  * Cycle complet sur session rejouée en pause (×0.5) : replier → pilule traversante → déplier → timeline de retour (270 px) → re-replier → stop DEPUIS la pilule → HUD fermé, barre replay revenue.
+  * 626×227 : barre replay apparue DIRECTEMENT en pilule (« REPLAY · 190 évts », repli auto), toggle manuel 31 ↔ 130 px ; « Routage live » lancé → pilule « LIVE · 0 % » auto pendant le vrai flux ; console propre (EOF flux normal, failed=false), ZÉRO erreur page.
+  * Captures : /tmp/p01-audit-live-compact.png, /tmp/p01-audit-compact.png, /tmp/p01-desktop-final.png.
+- Vérifications : bunx tsc --noEmit — src/ propre (résidus examples//skills/ hors scope, traités au P0.4).
+
+Stage Summary:
+- Le P0.1 de l'audit est soldé : les panneaux flottants ne volent plus aucun geste à la carte — l'arrière-plan est traversant partout, seuls les contrôles interceptent, et un repli compact automatique libère quasi toute la vue sur les petites fenêtres.
+- Aucune régression fonctionnelle : vitesse réglable, timeline seekable, interruption et lancement de replay opèrent à l'identique depuis les deux gabarits (déplié et pilule).
