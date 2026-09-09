@@ -10,7 +10,7 @@
  * et TIMELINE seekable : scrub, avance, recul, pause — dans la session.
  */
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Download, Pause, Play, RotateCcw, SkipBack, SkipForward, Square } from 'lucide-react'
+import { ChevronDown, ChevronUp, Download, Pause, Play, RotateCcw, SkipBack, SkipForward, Square, Upload } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 
 /* [audit P0.1] Les conteneurs du HUD sont TRAVERSAUX aux événements pointeur
@@ -155,7 +155,39 @@ export function LiveRoutingHud() {
   const canReplay = useStudio((s) => s.canReplay)
   const replayLastRouting = useStudio((s) => s.replayLastRouting)
   const exportReplaySession = useStudio((s) => s.exportReplaySession)
+  const importReplaySession = useStudio((s) => s.importReplaySession)
   const replayTotal = useStudio((s) => s.replayTotal)
+
+  /* [P1.4] Import de session : input fichier caché déclenché par le bouton ⬆,
+   * présent dans la barre dépliée ET la pilule compacte. */
+  const fileRef = useRef<HTMLInputElement>(null)
+  const onImportFile = (f: File | undefined) => {
+    if (f) importReplaySession(f)
+    if (fileRef.current) fileRef.current.value = '' // rejouable même fichier après correction
+  }
+  const importInput = (
+    <input
+      ref={fileRef}
+      type="file"
+      accept="application/json,.json"
+      className="hidden"
+      data-testid="replay-import-input"
+      onChange={(e) => onImportFile(e.target.files?.[0])}
+    />
+  )
+  const importBtn = (
+    <>
+      {importInput}
+      <button
+        onClick={() => fileRef.current?.click()}
+        title="Importer une session replay (JSON nexus-replay) — devient la session rejouable"
+        data-testid="replay-import"
+        className="pointer-events-auto rounded p-0.5 text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-violet-300"
+      >
+        <Upload className="h-3 w-3" />
+      </button>
+    </>
+  )
 
   /* Repli compact — automatique sur fenêtre contrainte [audit P0.1],
    * bascule manuelle via le chevron sinon. */
@@ -166,7 +198,18 @@ export function LiveRoutingHud() {
 
   /* ---------- Hors flux : barre replay de la dernière session ---------- */
   if (!live.active) {
-    if (!canReplay) return null
+    if (!canReplay) {
+      /* [P1.4] Aucune session (démarrage à froid, reload) : l'import doit
+       * rester accessible — pilule discrète, traversante hors bouton. */
+      return (
+        <div data-testid="replay-bar-empty" className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2">
+          <div className="flex items-center gap-1.5 rounded-full border border-neutral-800/60 bg-black/60 px-2.5 py-1 backdrop-blur">
+            {importBtn}
+            <span className="text-[9px] text-neutral-600">importer une session replay (JSON)</span>
+          </div>
+        </div>
+      )
+    }
     if (compact) {
       return (
         <div data-testid="replay-bar" className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2">
@@ -179,6 +222,7 @@ export function LiveRoutingHud() {
               <RotateCcw className="h-3 w-3" /> REPLAY
             </button>
             <span className="font-mono text-[9px] text-neutral-500">{replayTotal} évts</span>
+            {importBtn}
             <button
               onClick={exportReplaySession}
               title="Exporter la session enregistrée (JSON — base compactée + événements)"
@@ -209,6 +253,7 @@ export function LiveRoutingHud() {
             <SpeedSelector liveSpeed={liveSpeed} setLiveSpeed={setLiveSpeed} />
           </div>
           <div className="ml-auto flex items-center gap-0.5">
+            {importBtn}
             <button
               onClick={exportReplaySession}
               title="Exporter la session enregistrée (JSON — base compactée + événements, partageable et rejouable)"

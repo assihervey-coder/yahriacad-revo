@@ -147,6 +147,9 @@ interface StudioState {
   /** Exporte la session de routage enregistrée (JSON base + événements) —
    *  partageable et re-jouable ; compagnon du ring buffer par tranches. */
   exportReplaySession: () => void
+  /** [P1.4] Importe une session exportée (JSON nexus-replay v1) : elle devient
+   *  la session « dernière » — rejouable, seekable et re-exportable. */
+  importReplaySession: (file: File) => void
   /* HOOK DE TEST E2E uniquement : injecte n événements synthétiques dans
    * l'enregistrement replay (éprouve ring buffer, compaction et seeks sans
    * router des milliers de nets). Ne touche ni le HUD ni la carte hors session. */
@@ -774,6 +777,102 @@ export const useStudio = create<StudioState>((set, get) => ({
     a.click()
     URL.revokeObjectURL(url)
     s.log('system', 'agent', `[REPLAY] Session exportée — ${total} événements (base ${recBase.consumed} + bruts ${events.length}, ${recBase.traces} traces compactées) — JSON ${a.download}`)
+  },
+
+  /* ---------------- Import de session [audit P1.4] -------------------------
+   * Compagnon de l'export : un JSON nexus-replay v1 (base compactée +
+   * événements bruts) redevient la session « dernière » du studio — la barre
+   * REPLAY, la timeline seekable et l'export s'appliquent tel quel. Les
+   * événements sont assainis (seuls trace/progress/phase/hello sont
+   * rejouables — 'complete' vit dans result.routing, jamais enregistré). */
+  importReplaySession: (file) => {
+    const s = get()
+    if (s.running || s.surgicalBusy || s.liveRouting.active) {
+      s.log('system', 'warn', '[REPLAY] Import impossible pendant une session active — interrompez le flux d’abord.')
+      return
+    }
+    file.text()
+      .then((txt) => {
+        let data: {
+          format?: string
+          version?: number
+          project?: { id?: string; name?: string }
+          stats?: { total?: number }
+          base?: Partial<RecBase>
+          events?: unknown[]
+        }
+        try {
+          data = JSON.parse(txt)
+        } catch {
+          s.log('system', 'error', '[REPLAY] Import refusé — JSON illisible.')
+          return
+        }
+        if (
+          !data || data.format !== 'nexus-replay' || data.version !== 1 ||
+          !Array.isArray(data.events) || !data.base || typeof data.base.consumed !== 'number'
+        ) {
+          s.log('system', 'error', '[REPLAY] Import refusé — format nexus-replay v1 attendu (base + événements).')
+          return
+        }
+        // Assainissement : seuls les événements REJOUABLES ET NUMÉRIQUEMENT
+        // SAINS sont retenus — un segment/via corrompu (NaN, champ manquant)
+        // produirait une géométrie NaN côté viewer (THREE radius NaN).
+        const fin = (v: unknown) => typeof v === 'number' && Number.isFinite(v)
+        const segOk = (s: unknown): boolean => {
+          if (!s || typeof s !== 'object') return false
+          const x = s as { pts?: unknown; width?: unknown; net?: unknown }
+          return (
+            typeof x.net === 'string' && fin(x.width) && Array.isArray(x.pts) && x.pts.length >= 2 &&
+            x.pts.every((p) => p && fin((p as { x?: unknown }).x) && fin((p as { y?: unknown }).y))
+          )
+        }
+        const viaOk = (v: unknown): boolean => {
+          if (!v || typeof v !== 'object') return false
+          const x = v as { net?: unknown; x?: unknown; y?: unknown; drill?: unknown; diameter?: unknown }
+          return typeof x.net === 'string' && fin(x.x) && fin(x.y) && fin(x.drill) && fin(x.diameter)
+        }
+        const ok: LiveQueued[] = []
+        for (const e of data.events as LiveQueued[]) {
+          if (!e || typeof e !== 'object') continue
+          if (e.k === 'trace' && e.ev) {
+            if (e.ev.type === 'segment' && segOk(e.ev.segment)) { ok.push(e); continue }
+            if (e.ev.type === 'via' && viaOk(e.ev.via)) { ok.push(e); continue }
+            continue
+          }
+          if (e.k === 'progress' && e.p && typeof e.p.done === 'number') { ok.push(e); continue }
+          if (e.k === 'phase' && typeof e.phase === 'string') { ok.push(e); continue }
+          if (e.k === 'hello' && typeof e.total === 'number') { ok.push(e); continue }
+          // 'complete' et inconnus : ignorés (la finalisation vit dans result.routing)
+        }
+        const b = data.base
+        const hasTraces = ok.some((q) => q.k === 'trace') || (b.traces ?? 0) > 0 || (Array.isArray(b.routes) && b.routes.length > 0)
+        if (!hasTraces) {
+          s.log('system', 'error', '[REPLAY] Import refusé — la session ne contient aucune trace rejouable.')
+          return
+        }
+        const base: RecBase = {
+          consumed: typeof b.consumed === 'number' ? b.consumed : 0,
+          routes: Array.isArray(b.routes) ? b.routes : [],
+          traces: b.traces ?? 0,
+          netsDone: b.netsDone ?? 0,
+          netsTotal: b.netsTotal ?? 0,
+          currentNet: b.currentNet ?? '—',
+          phase: (b.phase ?? 'greedy') as RecBase['phase'],
+        }
+        // Révoque toute session résiduelle puis installe la session importée
+        liveEpoch++
+        liveFlush()
+        liveReplaying = false
+        livePaused = false
+        liveRecording = ok
+        recBase = base
+        const total = base.consumed + ok.length
+        set({ canReplay: true, replayPos: 0, replayTotal: total, replayPaused: false, liveRouting: idleLive(), liveRoutes: [] })
+        const other = data.project?.id && data.project.id !== s.netlistId
+        s.log('system', 'agent',
+          `[REPLAY] Session importée « ${file.name} » — ${total} événements (base ${base.consumed} + bruts ${ok.length}, ${base.traces} traces compactées)${other ? ' — projet d’origine différent : relecture visuelle' : ''}. REPLAY ou timeline pour la rejouer.`)
+      })
+      .catch(() => s.log('system', 'error', '[REPLAY] Import impossible — lecture du fichier échouée.'))
   },
 
   /* Hook E2E — injection synthétique dans l'enregistrement uniquement : on
