@@ -392,3 +392,26 @@ Work Log:
 
 Stage Summary:
 - FEUILLE DE ROUTE D'AUDIT INTÉGRALEMENT SOLLÉE (12/12) : P0.1-P0.4, P1.1-P1.4, P2.1-P2.4 — chaque item committé, testé (214 assertions moteur), vérifié E2E et poussé ; les 3 PDF (audit V4 + 2 landings) livrés en amont (e8bb06c).
+
+---
+Task ID: 19
+Agent: Super Z (agent principal)
+Task: Consolidation optimale P1.3–P2.4 — vérification exhaustive post-livraison, push du commit restant.
+
+Work Log:
+- État constaté : les 6 items (P1.3, P1.4, P2.1, P2.2, P2.3, P2.4) déjà implémentés et committés (4a9fbe0, 3fcc797, ba8dcd9, d5fa36f, e2b7508, cb71641) ; 1 commit worklog (60d5bce) resté en attente de push.
+- tsc --noEmit global : 0 erreur (exit 0).
+- Suite moteur : TOUS LES TESTS PASSENT (214 assertions — P1.1 pile 4 couches 26/28, plans L2/L3, P1.2 paire USB skew 0,00 mm…).
+- Smoke SSE : flux progressif OK (72 segments, 5 phases greedy→ripup→via-min→tune→pour, étalement 1406 ms).
+- E2E consolidé navigateur (:3000) — conception complète lancée puis :
+  · P1.3 : mode Comparer + « Δ vs précédent » → 12 métriques (4 ↗ · 6 ↘ · 2 =), deltas colorés, sémantique lowerIsBetter correcte (vias −19 % ↗, DRC +200 % ↘) ;
+  · P1.4 : bouton import session replay présent à froid ;
+  · P2.1 : bouton ODB++ (.tgz) + description Gerber X2 attributs ;
+  · P2.2 : carte PANELISATION PRODUCTION « CONFORME » — 7 contrôles verts, panel 122×102 mm 2×2, 87 % matière ;
+  · P2.3 : carte Corrélation live r=0,626 · pente 1,655 °C/u · RMSE 6,8 °C · 17 échant.+ancre ;
+  · P2.4 : journal des gestes immuable PERSISTANT cross-session (drag/undo 10:32 relus en base Prisma + nudges live 10:52 journalisés) ; bouton Deck SPICE présent.
+- Zéro erreur page / zéro erreur console.
+- Push final via hook pre-push bloquant : moteur ✓ (214 assertions) + SSE ✓ — cb71641..60d5bce main → main.
+
+Stage Summary:
+- La feuille de route d'audit 12/12 est confirmée solide en conditions réelles après re-validation complète ; origin/main à jour (60d5bce), arbre propre. Projet NEXUS PCB : audit intégralement soldé.
