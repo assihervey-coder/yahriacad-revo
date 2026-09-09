@@ -38,10 +38,14 @@ const BoardViewer = dynamic(
 
 export default function StudioPage() {
   const loadHistory = useStudio((s) => s.loadHistory)
+  const loadEditLog = useStudio((s) => s.loadEditLog)
 
   useEffect(() => {
     void loadHistory()
-  }, [loadHistory])
+    // Journal d'édition au démarrage à froid [M3] : deux sessions doivent
+    // voir le journal partagé dès l'ouverture, pas après un geste local.
+    void loadEditLog()
+  }, [loadHistory, loadEditLog])
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#070b09] text-emerald-50">
