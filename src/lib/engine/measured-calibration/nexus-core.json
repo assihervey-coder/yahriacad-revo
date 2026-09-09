@@ -1,0 +1,46 @@
+{
+  "engine": "nexus-pcb",
+  "kind": "measured-thermal-calibration",
+  "schemaVersion": 1,
+  "project": "nexus-core",
+  "revision": "4d4706ce0c8c0ef93edde99829b0cd35f789ce6e179310fc7ad940aa83bfc337",
+  "verdict": "CONFORME",
+  "thresholds": {
+    "rMin": 0.55,
+    "rmseMaxC": 8,
+    "maxErrMaxC": 15,
+    "minSamples": 2
+  },
+  "coefficients": {
+    "slope": 0.7080529537689657,
+    "intercept": 19.68254905209608,
+    "slopeCi95": [
+      0.4353745009906235,
+      0.9807314065473078
+    ]
+  },
+  "statistics": {
+    "r": 0.792061180925454,
+    "rmse": 4.168826738408421,
+    "maxErr": 8.061132816833092,
+    "usedSamples": 18,
+    "skippedSamples": 0
+  },
+  "coverage": {
+    "matchedRefs": [
+      "Y1"
+    ],
+    "missingRefs": [],
+    "ambientMinC": 20.4,
+    "ambientMaxC": 43.7
+  },
+  "sources": [
+    "DÉMO — données synthétiques (FDM + bruit capteur ±0,4 °C), campagne M1 en attente"
+  ],
+  "dataKind": "demo",
+  "provenance": {
+    "dataset": "measured-boards.demo-nexus-core.json",
+    "datasetSha256": "912e1c046a33972c5efa4354f82000abe6ad6f84c44bda5bd428bcad982af95b",
+    "calibratedAt": "2026-09-09T12:20:34.840Z"
+  }
+}

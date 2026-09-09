@@ -1,16 +1,20 @@
 {
 	"_doc": [
-		"P2.3 — Format des relevés de cartes mesurées pour scripts/calibrate_measured.ts.",
-		"Chaque élément de « boards » = une carte instrumentée : placement RÉEL (mm,",
-		"même convention que le studio) + ΔT mesuré (°C) relatif à ambientC, par",
-		"composant SENSIBLE du projet (U*, Y*, capteurs, RF). Provenance « source »",
-		"obligatoire pour le versionnage des coefficients (banc, campagne, date).",
+		"P2.3 / Sprint 1 M1 — Format des relevés de cartes mesurées pour",
+		"scripts/calibrate_measured.ts. Chaque élément de « boards » = une carte",
+		"instrumentée : placement RÉEL (mm, même convention que le studio) + ΔT",
+		"mesuré (°C) relatif à ambientC, sur les composants SENSIBLES du projet",
+		"(nexus-core → Y1 ; nexus-iot → U1,U2,U3 ; nexus-rf → ANT1,Y1,U1).",
+		"Provenance « source » obligatoire pour le versionnage des coefficients",
+		"(banc, campagne, date).",
 		"CE FICHIER EST UN GABARIT : les valeurs ci-dessous sont des EXEMPLES de",
-		"structure, PAS des mesures réelles. Il ne contient qu'UN relevé valide +",
-		"UN relevé invalide volontairement (capteur décollé) : le CLI doit refuser",
-		"de produire des coefficients (< 2 relevés exploitables).",
+		"structure, PAS des mesures réelles. Il contient volontairement UN relevé",
+		"sain + UN relevé invalide (capteur décollé, ΔT absurde) et N'EN a qu'UN",
+		"seul exploitable : le CLI doit REFUSER de produire des coefficients",
+		"(< 2 relevés exploitables → exit 1, aucun calage silencieux).",
 		"Remplacez par vos relevés réels (≥ 2 cartes, plusieurs configurations",
-		"thermiques) avant tout calage industriel."
+		"thermiques — protocole : docs/protocole-acquisition-cartes-mesurees.md)",
+		"avant tout calage industriel."
 	],
 	"project": "nexus-core",
 	"boards": [
@@ -18,14 +22,12 @@
 			"label": "EXEMPLE révision A — configuration nominale",
 			"ambientC": 22.4,
 			"placements": [
-				{ "ref": "U1", "x": 31, "y": 19.8, "rot": 180, "side": "top", "fixed": false },
-				{ "ref": "U2", "x": 46, "y": 12, "rot": 90, "side": "top", "fixed": false },
-				{ "ref": "U3", "x": 12, "y": 34, "rot": 0, "side": "top", "fixed": false }
+				{ "ref": "Y1", "x": 31, "y": 19.8, "rot": 180, "side": "top", "fixed": false },
+				{ "ref": "U1", "x": 46, "y": 12, "rot": 90, "side": "top", "fixed": false },
+				{ "ref": "U2", "x": 12, "y": 34, "rot": 0, "side": "top", "fixed": false }
 			],
 			"measurements": [
-				{ "ref": "U1", "deltaT": 18.2 },
-				{ "ref": "U2", "deltaT": 11.6 },
-				{ "ref": "U3", "deltaT": 9.1 }
+				{ "ref": "Y1", "deltaT": 14.8 }
 			],
 			"source": "EXEMPLE — banc thermocouple type-K, campagne 2026-08"
 		},
@@ -33,10 +35,10 @@
 			"label": "EXEMPLE relevé INVALIDE (capteur décollé — doit être écarté)",
 			"ambientC": 23.1,
 			"placements": [
-				{ "ref": "U1", "x": 20, "y": 20, "rot": 0, "side": "top", "fixed": false }
+				{ "ref": "Y1", "x": 20, "y": 20, "rot": 0, "side": "top", "fixed": false }
 			],
 			"measurements": [
-				{ "ref": "U1", "deltaT": 341.7 }
+				{ "ref": "Y1", "deltaT": 341.7 }
 			],
 			"source": "EXEMPLE — campagne 2026-08"
 		}

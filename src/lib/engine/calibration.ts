@@ -20,13 +20,15 @@ import { microstripZ0, solveThermal, AMBIENT } from './simulator'
 /* ====================== Régression linéaire partagée ====================== */
 
 /** Régression moindres carrés y = a·x + b + Pearson r (outil commun des deux
- *  harnais de calibration : simulation et cartes mesurées). */
+ *  harnais de calibration : simulation et cartes mesurées) + IC 95 % de la pente. */
 export function linregStats(arr: { a: number; b: number }[]): {
   r: number
   slope: number
   intercept: number
   rmse: number
   maxErr: number
+  /** IC 95 % de la pente — null si n < 3 ou variance nulle */
+  slopeCi95: [number, number] | null
 } {
   const n = arr.length
   const ma = arr.reduce((s, p) => s + p.a, 0) / n
@@ -46,7 +48,28 @@ export function linregStats(arr: { a: number; b: number }[]): {
     se += e * e
     maxE = Math.max(maxE, Math.abs(e))
   }
-  return { r, slope, intercept, rmse: Math.sqrt(se / n), maxErr: maxE }
+  const rmse = Math.sqrt(se / n)
+  return { r, slope, intercept, rmse, maxErr: maxE, slopeCi95: slopeCi95(n, slope, rmse, va) }
+}
+
+/** Quantile bilatéral 95 % de Student (table compacte, ddl = n−2) — au-delà
+ *  de 60 ddl on rejoint la normale (1,96). Clé la plus grande ≤ df (conservateur). */
+function t975(df: number): number {
+  const table: [number, number][] = [
+    [1, 12.706], [2, 4.303], [3, 3.182], [4, 2.776], [5, 2.571], [6, 2.447],
+    [7, 2.365], [8, 2.306], [9, 2.262], [10, 2.228], [12, 2.179], [14, 2.145],
+    [16, 2.12], [18, 2.101], [20, 2.086], [25, 2.06], [30, 2.042], [40, 2.021], [60, 2.0],
+  ]
+  for (let i = table.length - 1; i >= 0; i--) if (df >= table[i][0]) return table[i][1]
+  return 12.706
+}
+
+/** Intervalle de confiance 95 % de la pente : slope ± t(0,975; n−2)·RMSE/√Σ(x−x̄)².
+ *  null si n < 3 (ddl insuffisant) ou variance explicative nulle. */
+function slopeCi95(n: number, slope: number, rmse: number, sx2: number): [number, number] | null {
+  if (n < 3 || sx2 <= 0 || !Number.isFinite(rmse)) return null
+  const half = (t975(n - 2) * rmse) / Math.sqrt(sx2)
+  return [slope - half, slope + half]
 }
 
 export interface ThermalCalibration {
@@ -210,7 +233,51 @@ export interface MeasuredCalibration {
   ambientMaxC: number
   /** provenances déclarées (traçabilité des coefficients) */
   sources: string[]
+  /** IC 95 % de la pente de calage (°C/unité latente) — null si n < 3 */
+  slopeCi95: [number, number] | null
   at: string
+}
+
+/* ============ Seuils PUBLIÉS du calage industriel [Sprint 1 — M1] ============ */
+
+/** Seuils publiés : un jeu de coefficients n'est PUBLIÉ (versionné, exposé UI)
+ *  que si l'écart modèle/mesure reste sous ces bornes. Documentés dans
+ *  docs/protocole-acquisition-cartes-mesurees.md — toute modification passe
+ *  par une révision du protocole, pas par un relâchement silencieux. */
+export const PUBLISHED_THRESHOLDS = {
+  /** corrélation minimale prédiction latente ↔ mesure */
+  rMin: 0.55,
+  /** RMSE maximal de la droite calibrée (°C) */
+  rmseMaxC: 8,
+  /** écart maximal ponctuel droite ↔ mesure (°C) */
+  maxErrMaxC: 15,
+  /** nombre minimal de relevés exploitables pour publier */
+  minSamples: 2,
+} as const
+
+export interface ThresholdVerdict {
+  ok: boolean
+  /** motifs de refus, formatés pour le CLI et le journal */
+  failures: string[]
+}
+
+/** Verdict d'un calage mesuré contre les seuils publiés [M1 — DoD « écart
+ *  modèle/mesure documenté sous seuil publié »]. */
+export function measuredThresholdVerdict(cal: {
+  r: number
+  rmse: number
+  maxErr: number
+  usedSamples: number
+}): ThresholdVerdict {
+  const failures: string[] = []
+  if (cal.usedSamples < PUBLISHED_THRESHOLDS.minSamples)
+    failures.push(`relevés exploitables ${cal.usedSamples} < ${PUBLISHED_THRESHOLDS.minSamples}`)
+  if (!(cal.r >= PUBLISHED_THRESHOLDS.rMin)) failures.push(`r ${cal.r.toFixed(3)} < ${PUBLISHED_THRESHOLDS.rMin}`)
+  if (!(cal.rmse <= PUBLISHED_THRESHOLDS.rmseMaxC))
+    failures.push(`RMSE ${cal.rmse.toFixed(2)} °C > ${PUBLISHED_THRESHOLDS.rmseMaxC} °C`)
+  if (!(cal.maxErr <= PUBLISHED_THRESHOLDS.maxErrMaxC))
+    failures.push(`err max ${cal.maxErr.toFixed(2)} °C > ${PUBLISHED_THRESHOLDS.maxErrMaxC} °C`)
+  return { ok: failures.length === 0, failures }
 }
 
 /** Bornes de plausibilité des mesures réelles (°C) — garde-fou entrée.
@@ -279,7 +346,7 @@ export function calibrateFromMeasuredBoards(
   const fit =
     pairs.length >= 2
       ? linregStats(pairs.map((p) => ({ a: p.pred, b: p.truth })))
-      : { r: 0, slope: 0, intercept: 0, rmse: 0, maxErr: 0 }
+      : { r: 0, slope: 0, intercept: 0, rmse: 0, maxErr: 0, slopeCi95: null as [number, number] | null }
 
   return {
     samples: samples.length,
@@ -299,6 +366,7 @@ export function calibrateFromMeasuredBoards(
     ambientMinC: pairs.length ? ambMin : 0,
     ambientMaxC: pairs.length ? ambMax : 0,
     sources: [...sources],
+    slopeCi95: fit.slopeCi95,
     at: new Date().toISOString(),
   }
 }

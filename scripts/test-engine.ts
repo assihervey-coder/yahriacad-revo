@@ -23,13 +23,15 @@ import {
 } from '../src/lib/engine/panelizer'
 import {
   calibrateThermalModel, calibratedDeltaT, impedanceProfile, truthSensitiveDeltaT,
-  calibrateFromMeasuredBoards, sensitiveDeltaTs, type MeasuredBoardSample,
+  calibrateFromMeasuredBoards, sensitiveDeltaTs, PUBLISHED_THRESHOLDS,
+  measuredThresholdVerdict, type MeasuredBoardSample,
 } from '../src/lib/engine/calibration'
 import { buildEvalContext, mulberry32 } from '../src/lib/engine/world-model'
 import type { PlacedComponent } from '../src/lib/engine/types'
 import { AMBIENT } from '../src/lib/engine/simulator'
 import { generateSpiceDeck } from '../src/lib/engine/spice'
 import { DEFAULT_RULES } from '../src/lib/engine/rules'
+import { datasetSha256, measuredRevision } from './lib/measured-versioning'
 
 let failures = 0
 const assert = (cond: boolean, label: string) => {
@@ -249,6 +251,36 @@ for (const nl of NETLISTS) {
   assert(mcal.r > 0.5 && Math.abs(mcal.r - cal.r) < 0.1, `mesuré : corrélation r = ${mcal.r.toFixed(3)} ≈ r FDM ${cal.r.toFixed(3)} sur les mêmes placements (bruit ±0,2 °C)`)
   assert(mcal.slope > 0 && Math.abs(mcal.slope - cal.slope) / cal.slope < 0.15, `mesuré : pente ${mcal.slope.toFixed(3)} ≈ pente FDM ${cal.slope.toFixed(3)} °C/u (mêmes placements, ±15 %)`)
   assert(mcal.matchedRefs.length > 0 && mcal.sources.length === 1, `mesuré : ${mcal.matchedRefs.length} refs sensibles couvertes, provenance tracée`)
+
+  // ---- Sprint 1 M1 — seuils publiés, IC de pente, versionnage ----
+  assert(
+    PUBLISHED_THRESHOLDS.rMin > 0 && PUBLISHED_THRESHOLDS.rMin < 1 &&
+    PUBLISHED_THRESHOLDS.rmseMaxC > 0 && PUBLISHED_THRESHOLDS.maxErrMaxC > PUBLISHED_THRESHOLDS.rmseMaxC &&
+    PUBLISHED_THRESHOLDS.minSamples >= 2,
+    `M1 : seuils publiés cohérents (r ≥ ${PUBLISHED_THRESHOLDS.rMin}, RMSE ≤ ${PUBLISHED_THRESHOLDS.rmseMaxC} °C, err ≤ ${PUBLISHED_THRESHOLDS.maxErrMaxC} °C, ≥ ${PUBLISHED_THRESHOLDS.minSamples} relevés)`,
+  )
+  const vOk = measuredThresholdVerdict({ r: 0.9, rmse: 1, maxErr: 2, usedSamples: 5 })
+  const vKo = measuredThresholdVerdict({ r: 0.4, rmse: 20, maxErr: 40, usedSamples: 1 })
+  assert(vOk.ok === true && vKo.ok === false && vKo.failures.length === 4, 'M1 : verdict seuils — conforme accepté, 4 motifs de refus sur un calage hors seuil')
+  assert(
+    mcal.slopeCi95 !== null && mcal.slopeCi95[0] < mcal.slope && mcal.slope < mcal.slopeCi95[1] && mcal.slopeCi95[1] - mcal.slopeCi95[0] > 0,
+    `M1 : IC 95 % de la pente défini et encadrant — [${mcal.slopeCi95?.[0].toFixed(3)} ; ${mcal.slopeCi95?.[1].toFixed(3)}] °C/u`,
+  )
+  const revPayload = {
+    project: 'test', coefficients: { slope: 1.25, intercept: 3.5, slopeCi95: [1.1, 1.4] as [number, number] },
+    statistics: { r: 0.8, rmse: 2, maxErr: 4, usedSamples: 5, skippedSamples: 1 },
+    coverage: { matchedRefs: ['U1'], missingRefs: [], ambientMinC: 20, ambientMaxC: 40 },
+    sources: ['banc X'], datasetSha256: 'deadbeef', schemaVersion: 1,
+  }
+  assert(
+    measuredRevision(revPayload) === measuredRevision(revPayload) &&
+    measuredRevision(revPayload) !== measuredRevision({ ...revPayload, coefficients: { ...revPayload.coefficients, slope: 1.26 } }),
+    'M1 : révision des coefficients déterministe (stable si entrées inchangées, sensible au moindre ΔT)',
+  )
+  assert(
+    datasetSha256('nexus') === datasetSha256('nexus') && datasetSha256('nexus') !== datasetSha256('nexus!'),
+    'M1 : empreinte SHA-256 du jeu de relevés stable et discriminante',
+  )
 
   // ---- P2.4 — SPICE : corrélation circuit avec parasitique de routage ----
   const spice = generateSpiceDeck(nl, routing)

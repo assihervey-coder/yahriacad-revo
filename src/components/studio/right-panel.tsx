@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Bot, CheckCircle2, Download, FileDown, Gauge, GitCompare, LayoutGrid, Minus, Package, Plus, Repeat, ShieldCheck,
+  Bot, CheckCircle2, Download, FileDown, Gauge, GitCompare, LayoutGrid, Minus, Package, Plus, Repeat, Ruler, ShieldCheck,
   Thermometer, TriangleAlert, X, Zap,
 } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
@@ -18,7 +18,8 @@ import {
   calibrateThermalModel, calibratedDeltaT, impedanceProfile,
   type ThermalCalibration,
 } from '@/lib/engine/calibration'
-import { buildEvalContext } from '@/lib/engine/world-model'
+import { buildEvalContext, predictThermal } from '@/lib/engine/world-model'
+import { MEASURED_CALIBRATIONS } from '@/lib/engine/measured-calibration'
 import { AMBIENT } from '@/lib/engine/simulator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
@@ -154,6 +155,13 @@ export function RightPanel() {
     return calibratedDeltaT(thermalCal, calCtx, map)
   }, [thermalCal, result.placement, calCtx])
   const ziProfile = useMemo(() => impedanceProfile(DEFAULT_RULES), [])
+  // --- Droite de calage MESURÉE publiée dans le dépôt [Sprint 1 M2] ---
+  const measured = MEASURED_CALIBRATIONS[netlist.id] ?? null
+  const measuredEst = useMemo(() => {
+    if (!measured || !result.placement) return null
+    const map = new Map(result.placement.placements.map((p) => [p.ref, p]))
+    return Math.max(0, measured.coefficients.slope * predictThermal(calCtx, map) + measured.coefficients.intercept)
+  }, [measured, result.placement, calCtx])
   const runCalibration = () => {
     if (calBusy) return
     setCalBusy(true)
@@ -542,6 +550,87 @@ export function RightPanel() {
               {calBusy ? 'Calibration en cours (FDM ×17)…' : thermalCal ? 'Recalibrer le modèle latent' : 'Calibrer le modèle latent'}
             </Button>
           </section>
+
+          {/* Droite de calage MESURÉE — publication encadrée [Sprint 1 M2] */}
+          {measured ? (
+            <section className="rounded-lg border border-amber-900/40 bg-black/30 p-3" data-testid="measured-calibration-card">
+              <div className="mb-1.5 flex items-center gap-2">
+                <Ruler className="h-4 w-4 text-amber-400" />
+                <span className="text-[11px] font-semibold text-amber-200">Droite de calage mesurée</span>
+                <Badge
+                  variant="outline"
+                  data-testid="measured-cal-kind"
+                  className={`ml-auto h-4.5 border px-1.5 text-[9px] ${
+                    measured.dataKind === 'demo' ? 'border-amber-700 text-amber-400' : 'border-emerald-700 text-emerald-400'
+                  }`}
+                >
+                  {measured.dataKind === 'demo' ? 'démonstration' : 'campagne réelle'}
+                </Badge>
+              </div>
+              <p className="mb-2 text-[9px] leading-relaxed text-neutral-500">
+                Droite latent→°C calée sur des CARTES MESURÉES (relevés instrumentés, pas la simulation),
+                produite par le CLI de calage, versionnée dans le dépôt et soumise aux seuils publiés —
+                à lire à côté de la corrélation simulation ci-dessus.
+              </p>
+              <div className="mb-2 grid grid-cols-4 gap-1.5 text-center">
+                <div className="rounded-md bg-black/40 py-1.5">
+                  <div className="font-mono text-sm font-bold text-amber-300">
+                    {measured.coefficients.slope.toFixed(3)}
+                    {measured.coefficients.slopeCi95 && (
+                      <div className="font-mono text-[7px] font-normal text-neutral-500">
+                        ±{((measured.coefficients.slopeCi95[1] - measured.coefficients.slopeCi95[0]) / 2).toFixed(2)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-[8px] text-neutral-500">°C/u (IC 95 %)</div>
+                </div>
+                <div className="rounded-md bg-black/40 py-1.5">
+                  <div className="font-mono text-sm font-bold text-amber-300">{measured.coefficients.intercept.toFixed(1)}</div>
+                  <div className="text-[8px] text-neutral-500">intercept °C</div>
+                </div>
+                <div className="rounded-md bg-black/40 py-1.5">
+                  <div className="font-mono text-sm font-bold text-amber-300">{measured.statistics.r.toFixed(3)}</div>
+                  <div className="text-[8px] text-neutral-500">corrélation r</div>
+                </div>
+                <div className="rounded-md bg-black/40 py-1.5">
+                  <div className="font-mono text-sm font-bold text-amber-300">{measured.statistics.rmse.toFixed(1)}</div>
+                  <div className="text-[8px] text-neutral-500">RMSE °C</div>
+                </div>
+              </div>
+              {measuredEst !== null && (
+                <div className="mb-2 flex items-center justify-between rounded-md bg-black/40 px-2.5 py-1.5 text-[9px]">
+                  <span className="text-neutral-500">ΔT sensibles du placement courant — prédiction calibrée MESURÉE</span>
+                  <span className="font-mono text-amber-300" data-testid="measured-prediction">{measuredEst.toFixed(1)} °C</span>
+                </div>
+              )}
+              <div className="mb-2 text-[8px] leading-relaxed text-neutral-600" data-testid="measured-scope-note">
+                Portée : refs {measured.coverage.matchedRefs.join(', ') || '—'} · ambiance{' '}
+                {measured.coverage.ambientMinC.toFixed(0)}–{measured.coverage.ambientMaxC.toFixed(0)} °C ·{' '}
+                {measured.statistics.usedSamples} relevés ({measured.statistics.skippedSamples} écarté(s)) · seuils r≥
+                {measured.thresholds.rMin} · RMSE≤{measured.thresholds.rmseMaxC} °C · révision{' '}
+                {measured.revision.slice(0, 12)}… · {measured.provenance.dataset}
+                {measured.dataKind === 'demo'
+                  ? ' — coefficients de DÉMONSTRATION synthétique (vérité terrain FDM) : la campagne sur cartes instrumentées (protocole M1) produira les coefficients industriels.'
+                  : ` — campagne : ${measured.sources.join(' ; ')}`}
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-lg border border-neutral-800/60 bg-black/30 p-3" data-testid="measured-calibration-card">
+              <div className="mb-1.5 flex items-center gap-2">
+                <Ruler className="h-4 w-4 text-neutral-500" />
+                <span className="text-[11px] font-semibold text-neutral-400">Droite de calage mesurée</span>
+                <Badge variant="outline" className="ml-auto h-4.5 border border-neutral-700 px-1.5 text-[9px] text-neutral-500">
+                  en attente
+                </Badge>
+              </div>
+              <p className="text-[9px] leading-relaxed text-neutral-600">
+                Aucun coefficient mesuré publié pour ce projet : le dernier calage est resté sous les
+                seuils publiés ou la campagne n&apos;a pas encore eu lieu. Le harnais est prêt — gabarit
+                de relevés, CLI de calage versionné et protocole d&apos;instrumentation dans le dépôt ;
+                tant qu&apos;il n&apos;est pas soldé, la corrélation reste calibrée sur simulation.
+              </p>
+            </section>
+          )}
 
           {/* DRC */}
           <section className="rounded-lg border border-red-900/40 bg-black/30 p-3">
