@@ -14,7 +14,9 @@
     "test:engine": "bun run scripts/test-engine.ts",
     "test:sse": "bun run scripts/test-live-sse.ts",
     "test:e2e": "bun run scripts/e2e-resolutions.ts",
-    "setup:hooks": "git config core.hooksPath scripts/hooks"
+    "setup:hooks": "git config core.hooksPath scripts/hooks",
+    "db:pg": "bash scripts/use-db.sh postgres",
+    "db:sqlite": "bash scripts/use-db.sh sqlite"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

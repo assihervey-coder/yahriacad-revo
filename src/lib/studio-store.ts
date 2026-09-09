@@ -100,6 +100,7 @@ interface StudioState {
     selectedRef: string | null
   }
   history: RunHistoryItem[]
+  editLog: EditLogItem[]
   liveRouting: LiveRoutingState
   liveRoutes: Route[]
   /** Vitesse de lecture du flux live : 0.5 | 1 | 2 | 4 */
@@ -127,6 +128,8 @@ interface StudioState {
   reset: () => void
   setViewer: (patch: Partial<StudioState['viewer']>) => void
   loadHistory: () => Promise<void>
+  /** Journal d'édition [P2.4] — recharge les derniers gestes journalisés */
+  loadEditLog: () => Promise<void>
   /* Routage live [DeepPCB] */
   startLiveRouting: (pacingMs?: number, force?: boolean) => Promise<void>
   stopLiveRouting: (reason?: 'user' | 'nudge') => void
@@ -169,6 +172,57 @@ interface StudioState {
 let cancelFlag = false
 let liveAbort: AbortController | null = null
 
+/* --- Journal d'édition [P2.4] ------------------------------------------------
+ * Chaque geste d'édition est journalisé de façon immuable (/api/edits) :
+ * kind, ref, positions avant/après, auteur (actor — multi-utilisateurs prêt).
+ * Fire-and-forget : la télémétrie ne doit jamais bloquer un geste. */
+export interface EditLogItem {
+  id: string
+  kind: string
+  ref: string
+  xFrom: number
+  yFrom: number
+  xTo: number
+  yTo: number
+  rotFrom: number | null
+  rotTo: number | null
+  actor: string
+  meta: string | null
+  createdAt: string
+}
+
+function logEdit(
+  kind: string,
+  ref: string,
+  from: { x: number; y: number; rot?: number },
+  to: { x: number; y: number; rot?: number },
+  meta?: string,
+) {
+  const s = useStudio.getState()
+  void fetch('/api/edits', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ netlistId: s.netlistId, kind, ref, from, to, meta }),
+  })
+    .then(() => s.loadEditLog())
+    .catch(() => undefined)
+}
+
+/** Diff de deux instantanés : le composant déplacé (le premier détecté). */
+function placementDiff(
+  before: PlacedComponent[],
+  after: PlacedComponent[],
+): { ref: string; from: PlacedComponent; to: PlacedComponent } | null {
+  for (const a of after) {
+    const b = before.find((p) => p.ref === a.ref)
+    if (!b) continue
+    if (Math.abs(b.x - a.x) > 1e-6 || Math.abs(b.y - a.y) > 1e-6 || b.rot !== a.rot) {
+      return { ref: a.ref, from: b, to: a }
+    }
+  }
+  return null
+}
+
 /* --- Moteur de lecture du flux live [DeepPCB] --------------------------------
  * Le réseau pousse les événements à son rythme filaire ; le DESSIN, lui, est
  * cadencé localement : un événement joué toutes les BASE_TICK_MS / liveSpeed.
@@ -204,6 +258,7 @@ let replayTotal = 0
  * et un flux live/replay a-t-il été coupé au passage (→ reprise EN DIRECT) */
 let dragMoved = false
 let dragWasLive = false
+let dragFromPos: PlacedComponent | null = null // journal d'édition [P2.4]
 
 /** Enregistrement de la dernière session de routage (traces, progression,
  *  phases) pour le mode « replay » — rempli à la volée dans liveEnqueue,
@@ -463,6 +518,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   constraintsCount: 0,
   viewer: { mode: '3d', showTraces: true, showHeatmap: false, showComponents: true, selectedRef: null },
   history: [],
+  editLog: [],
   liveRouting: idleLive(),
   liveRoutes: [],
   liveSpeed: 1,
@@ -502,6 +558,7 @@ export const useStudio = create<StudioState>((set, get) => ({
       liveRoutes: [],
     })
     void get().loadHistory()
+    void get().loadEditLog()
   },
 
   // [P1.1] pile de couches : copie superficielle — les NETLISTS partagées ne sont jamais mutées
@@ -519,6 +576,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   surgicalMove: async (ref, dx, dy) => {
     const s = get()
     if (s.running || s.surgicalBusy || !s.livePlacements || !s.result.thermal) return
+    const before = s.livePlacements
     pushPlacementHistory() // undo multi-niveaux — l'état AVANT le déplacement
     set({ surgicalBusy: true, livePlacements: s.livePlacements.map((p) => p.ref === ref ? { ...p, x: p.x + dx, y: p.y + dy } : p) })
     get().log('system', 'agent', `[CHIRURGIE] ${ref} déplacé de (${dx > 0 ? '+' : ''}${dx}, ${dy > 0 ? '+' : ''}${dy}) mm — re-routage incrémental…`)
@@ -539,6 +597,8 @@ export const useStudio = create<StudioState>((set, get) => ({
       }
     })
     set({ livePlacements: clamped })
+    const moved = placementDiff(before, clamped)
+    if (moved) logEdit('move', moved.ref, moved.from, moved.to)
     await rerouteAfterPlacementEdit('[CHIRURGIE]')
     set({ surgicalBusy: false })
   },
@@ -630,6 +690,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   liveNudge: async (ref, dx, dy) => {
     const s = get()
     if (s.running || s.surgicalBusy || !s.livePlacements) return
+    const before = s.livePlacements
     pushPlacementHistory() // undo multi-niveaux — l'état AVANT le nudge
     set({ surgicalBusy: true })
     get().log('system', 'agent', `[NUDGE LIVE] ${ref} déplacé de (${dx > 0 ? '+' : ''}${dx}, ${dy > 0 ? '+' : ''}${dy}) mm — coupure du flux puis re-routage en direct…`)
@@ -654,6 +715,8 @@ export const useStudio = create<StudioState>((set, get) => ({
       }
     })
     set({ livePlacements: clamped, surgicalBusy: false })
+    const moved = placementDiff(before, clamped)
+    if (moved) logEdit('nudge-live', moved.ref, moved.from, moved.to, 'flux live coupé puis repris en direct')
     void get().startLiveRouting(3, true) // le routeur repart EN DIRECT, trait par trait
   },
 
@@ -915,6 +978,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     if (s.running || s.surgicalBusy || s.liveRouting.active || !s.livePlacements || !s.result.thermal) return
     const hist = s.placementHistory
     if (hist.length === 0) return
+    const before = s.livePlacements
     const prev = hist[hist.length - 1]
     set({
       placementHistory: hist.slice(0, -1),
@@ -922,6 +986,8 @@ export const useStudio = create<StudioState>((set, get) => ({
       surgicalBusy: true,
       livePlacements: prev.map((p) => ({ ...p })),
     })
+    const undone = placementDiff(before, prev)
+    if (undone) logEdit('undo', undone.ref, undone.from, undone.to, `annulation (${hist.length - 1} restante(s))`)
     s.log('system', 'agent', `[UNDO] Retour au placement précédent (${hist.length - 1} annulation(s) restante(s)) — re-routage incrémental…`)
     await new Promise((r) => setTimeout(r, 40))
     await rerouteAfterPlacementEdit('[UNDO]')
@@ -933,6 +999,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     if (s.running || s.surgicalBusy || s.liveRouting.active || !s.livePlacements || !s.result.thermal) return
     const redo = s.redoStack
     if (redo.length === 0) return
+    const before = s.livePlacements
     const next = redo[redo.length - 1]
     set({
       redoStack: redo.slice(0, -1),
@@ -940,6 +1007,8 @@ export const useStudio = create<StudioState>((set, get) => ({
       surgicalBusy: true,
       livePlacements: next.map((p) => ({ ...p })),
     })
+    const redone = placementDiff(before, next)
+    if (redone) logEdit('redo', redone.ref, redone.from, redone.to, `rétablissement (${redo.length - 1} restant(s))`)
     s.log('system', 'agent', `[REDO] Déplacement rétabli (${redo.length - 1} rétablissement(s) restant(s)) — re-routage incrémental…`)
     await new Promise((r) => setTimeout(r, 40))
     await rerouteAfterPlacementEdit('[REDO]')
@@ -957,6 +1026,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     if (s.running || s.surgicalBusy || !s.livePlacements) return
     dragMoved = false
     dragWasLive = false
+    dragFromPos = s.livePlacements.find((p) => p.ref === ref) ?? null // journal [P2.4]
     set({ dragRef: ref })
   },
 
@@ -990,11 +1060,18 @@ export const useStudio = create<StudioState>((set, get) => ({
     const s = get()
     const wasMoved = dragMoved
     const wasLive = dragWasLive
+    const fromPos = dragFromPos
     dragMoved = false
     dragWasLive = false
+    dragFromPos = null
     set({ dragRef: null })
     if (!wasMoved || !s.livePlacements) return // simple clic sans mouvement → sélection seule
     if (s.running) return
+    // Journal [P2.4] — le drag est tracé dans tous les cas de re-routage
+    const toPos = s.livePlacements.find((p) => p.ref === ref)
+    if (fromPos && toPos && (Math.abs(fromPos.x - toPos.x) > 1e-6 || Math.abs(fromPos.y - toPos.y) > 1e-6)) {
+      logEdit('drag', ref, fromPos, toPos, wasLive ? 'flux live coupé puis repris en direct' : undefined)
+    }
     if (wasLive) {
       // un flux live/replay tournait : le routeur repart EN DIRECT sur la nouvelle géométrie
       void get().startLiveRouting(3, true)
@@ -1214,6 +1291,16 @@ export const useStudio = create<StudioState>((set, get) => ({
       set({ history: data.runs ?? [] })
     } catch {
       set({ history: [] })
+    }
+  },
+
+  loadEditLog: async () => {
+    try {
+      const res = await fetch(`/api/edits?netlistId=${get().netlistId}&take=12`)
+      const data = await res.json() as { edits?: EditLogItem[] }
+      set({ editLog: data.edits ?? [] })
+    } catch {
+      set({ editLog: [] })
     }
   },
 }))

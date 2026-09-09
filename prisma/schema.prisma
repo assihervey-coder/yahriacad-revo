@@ -12,11 +12,31 @@ datasource db {
 
 /// Projet de conception (une netlist + son historique)
 model Project {
-  id        String @id @default(cuid())
-  netlistId String // identifiant de netlist (nexus-core, nexus-iot, nexus-rf)
+  id        String      @id @default(cuid())
+  netlistId String      // identifiant de netlist (nexus-core, nexus-iot, nexus-rf)
   name      String
-  createdAt DateTime @default(now())
+  createdAt DateTime    @default(now())
   runs      Run[]
+  edits     EditEvent[]
+}
+
+/// Journal d'édition immuable [P2.4] — traçabilité des gestes d'édition
+/// (multi-utilisateurs prêt : actor distinguera les auteurs sur Postgres)
+model EditEvent {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actor     String   @default("local") // auteur du geste (session multi-user à venir)
+  kind      String   // move | nudge-live | drag | undo | redo
+  ref       String   // designateur du composant
+  xFrom     Float
+  yFrom     Float
+  xTo       Float
+  yTo       Float
+  rotFrom   Int?
+  rotTo     Int?
+  meta      String?  // détail libre (ex: « flux live coupé puis repris »)
+  createdAt DateTime @default(now())
 }
 
 /// Exécution du pipeline de conception autonome

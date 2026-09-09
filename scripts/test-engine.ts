@@ -24,6 +24,7 @@ import {
 import { calibrateThermalModel, calibratedDeltaT, impedanceProfile, truthSensitiveDeltaT } from '../src/lib/engine/calibration'
 import { buildEvalContext } from '../src/lib/engine/world-model'
 import { AMBIENT } from '../src/lib/engine/simulator'
+import { generateSpiceDeck } from '../src/lib/engine/spice'
 import { DEFAULT_RULES } from '../src/lib/engine/rules'
 
 let failures = 0
@@ -191,6 +192,20 @@ for (const nl of NETLISTS) {
   const zi = impedanceProfile(DEFAULT_RULES)
   assert(zi.length >= 7 && zi.every((z) => z.z0 > 0), `profil d'impédance : ${zi.length} classes (Z0 > 0)`)
   assert(Math.abs((zi.find((z) => z.cls === 'rf')?.z0 ?? 0) - 50) < 40, `RF 2,8 mm : Z0 ${(zi.find((z) => z.cls === 'rf')?.z0 ?? 0).toFixed(1)} Ω ≈ cible 50 Ω`)
+
+  // ---- P2.4 — SPICE : corrélation circuit avec parasitique de routage ----
+  const spice = generateSpiceDeck(nl, routing)
+  assert(spice.file.content.includes('.SUBCKT') && spice.file.content.includes('.END'), 'SPICE : deck .cir structurel (SUBCKT/END)')
+  assert((spice.file.content.match(/^X/gm) || []).length === nl.components.length, `SPICE : ${nl.components.length} instances X (une par composant)`)
+  assert(/^R_\w+_\d+ \S+ \S+ [\d.]+m ;/m.test(spice.file.content), 'SPICE : R série par segment (mΩ, longueur/largeur documentés)')
+  assert(/^C_\w+_\d+ \S+ 0 [\d.]+f$/m.test(spice.file.content), 'SPICE : C shunt par segment (fF)')
+  const rLine = spice.file.content.split('\n').find((l) => l.startsWith('R_'))
+  const rValM = rLine ? parseFloat(rLine.split(' ')[3]) : NaN
+  assert(Number.isFinite(rValM) && rValM > 0 && rValM < 1000, `SPICE : R physique plausible (${rValM} mΩ par segment)`)
+  assert(
+    spice.stats.segments > 0 && spice.stats.rTotalOhm > 0 && spice.stats.cTotalF > 0,
+    `SPICE : bilan ${spice.stats.segments} segments — ΣR ${(spice.stats.rTotalOhm * 1e3).toFixed(1)} mΩ, ΣC ${(spice.stats.cTotalF * 1e15).toFixed(2)} pF`,
+  )
 }
 
 /* ============ [P1.1] Pile 4 couches — signal/signal/masse/alim ============ */

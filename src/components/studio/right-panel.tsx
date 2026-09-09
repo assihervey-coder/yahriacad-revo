@@ -72,6 +72,7 @@ export function RightPanel() {
   const costHistory = useStudio((s) => s.costHistory)
   const running = useStudio((s) => s.running)
   const history = useStudio((s) => s.history)
+  const editLog = useStudio((s) => s.editLog)
   const netlist = useStudio((s) => s.netlist)
   const setViewer = useStudio((s) => s.setViewer)
 
@@ -757,6 +758,21 @@ export function RightPanel() {
                   >
                     <LayoutGrid className="h-3.5 w-3.5" /> Télécharger le panel ({(netlist.board.layers >= 4 ? 4 : 2) + 3} fichiers)
                   </Button>
+                  {/* ---------- Deck SPICE — corrélation circuit [audit P2.4] ---------- */}
+                  <Button
+                    variant="outline"
+                    className="w-full gap-2 border-violet-700 bg-violet-950/30 text-xs text-violet-300 hover:bg-violet-900/40"
+                    onClick={async () => {
+                      const { generateSpiceDeck } = await import('@/lib/engine/spice')
+                      const { file, stats } = generateSpiceDeck(netlist, result.routing!)
+                      download(`${gerberDir}_${file.name}`, file.content)
+                      useStudio.getState().log('system', 'agent',
+                        `[SPICE] Deck exporté — ${stats.segments} segments parasitiques (ΣR ${(stats.rTotalOhm * 1e3).toFixed(1)} mΩ, ΣC ${(stats.cTotalF * 1e15).toFixed(1)} pF), ${stats.instances} instances X`)
+                    }}
+                    data-testid="export-spice"
+                  >
+                    <Zap className="h-3.5 w-3.5" /> Deck SPICE (.cir — parasitique R/C)
+                  </Button>
                 </div>
               )}
               <p className="text-[9px] leading-relaxed text-neutral-600">
@@ -916,6 +932,33 @@ export function RightPanel() {
                     )}
                   </div>
                 ))
+              )}
+              {/* ---------- Journal d'édition [audit P2.4] ---------- */}
+              {editLog.length > 0 && (
+                <div className="space-y-1 pt-1.5">
+                  <div className="px-0.5 text-[9px] font-semibold uppercase tracking-wide text-neutral-500">
+                    Journal d&apos;édition (immuable) · {editLog.length} derniers gestes
+                  </div>
+                  {editLog.map((e) => (
+                    <div key={e.id} data-testid={`edit-${e.id}`} className="flex items-center gap-1.5 rounded border border-neutral-800/60 bg-black/30 px-2 py-1 text-[9px]">
+                      <span className={`rounded px-1 font-mono ${
+                        e.kind === 'nudge-live' ? 'bg-fuchsia-900/60 text-fuchsia-300'
+                        : e.kind === 'drag' ? 'bg-amber-900/60 text-amber-300'
+                        : e.kind === 'undo' ? 'bg-neutral-700/60 text-neutral-300'
+                        : e.kind === 'redo' ? 'bg-teal-900/60 text-teal-300'
+                        : 'bg-sky-900/60 text-sky-300'
+                      }`}>
+                        {e.kind}
+                      </span>
+                      <span className="font-mono text-neutral-300">{e.ref}</span>
+                      <span className="font-mono text-neutral-500">
+                        ({e.xTo - e.xFrom >= 0 ? '+' : ''}{(e.xTo - e.xFrom).toFixed(1)}, {e.yTo - e.yFrom >= 0 ? '+' : ''}{(e.yTo - e.yFrom).toFixed(1)}) mm
+                      </span>
+                      {e.meta && <span className="truncate text-neutral-600" title={e.meta}>{e.meta}</span>}
+                      <span className="ml-auto font-mono text-neutral-600">{new Date(e.createdAt).toLocaleTimeString('fr-FR')}</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </>
           )}
