@@ -17,6 +17,10 @@ import { routeAll } from '../src/lib/engine/router'
 import { runDfm, runDrc } from '../src/lib/engine/drc'
 import { generateGerber } from '../src/lib/engine/gerber'
 import { buildOdbJob, buildTar } from '../src/lib/engine/odb'
+import {
+  FABRICS, checkManufacturability, buildPanel, offsetGerber, generatePanelPackage,
+  type FabPreset,
+} from '../src/lib/engine/panelizer'
 import { DEFAULT_RULES } from '../src/lib/engine/rules'
 
 let failures = 0
@@ -138,6 +142,34 @@ for (const nl of NETLISTS) {
   }
   const odbLines = odb.files.find((f) => f.path.endsWith('layers/f_cu/lines'))!
   assert(/^L \d+ \d+ \d+ \d+ r\d+$/m.test(odbLines.content), 'ODB++ : enregistrements L (pistes) en µm')
+
+  // ---- P2.2 — Panelisation + contraintes fabricant ----
+  const jlc = FABRICS[0]
+  const fab = checkManufacturability(nl, routing, jlc, DEFAULT_RULES)
+  assert(fab.checks.length === 7, 'conformité fabricant : 7 contrôles (piste, perçage, anneau, isolement, bord, dimensions, couches)')
+  assert(fab.checks.every((c) => c.measured.length > 0), 'conformité : chaque contrôle porte une valeur mesurée')
+  const absurd: FabPreset = { ...jlc, id: 'absurd', name: 'Absurde', minTraceMm: 50, minDrillMm: 50 }
+  const fab2 = checkManufacturability(nl, routing, absurd, DEFAULT_RULES)
+  assert(!fab2.pass && fab2.checks.find((c) => c.id === 'trace')?.ok === false, 'conformité : préréglage absurde rejeté (piste)')
+
+  const panel = buildPanel(nl, { cols: 2, rows: 2, gapMm: 2, railMm: 5, mode: 'vcut' })
+  assert(panel.origins.length === 4, 'panel 2×2 : 4 origines de copies')
+  assert(Math.abs(panel.panelW - (2 * nl.board.w + 2)) < 1e-9, 'panel : largeur = 2×carte + gap')
+  assert(Math.abs(panel.panelH - (2 * nl.board.h + 2 + 10)) < 1e-9, 'panel : hauteur = 2×carte + gap + 2 rails')
+  assert(panel.vcutLines.length === 2, 'panel V-cut : 1 axe vertical + 1 axe horizontal')
+  assert(panel.fiducials.length === 4 && panel.toolingHoles.length === 4, 'panel : 4 repères + 4 trous de centrage')
+  assert(panel.utilization > 0.5 && panel.utilization < 1, `panel : utilisation matière ${(panel.utilization * 100).toFixed(0)} %`)
+  const bites = buildPanel(nl, { cols: 2, rows: 1, gapMm: 2, railMm: 5, mode: 'bites' })
+  assert(bites.biteHoles.length > 0 && bites.vcutLines.length === 0, 'panel onglets : trous micro-percés générés, zéro V-cut')
+  const shifted = offsetGerber('X1000000Y2000000D01*', 1.5, -0.5)
+  assert(shifted.includes('X2500000') && shifted.includes('Y1500000'), 'translation Gerber exacte (µ)')
+  const pkg = generatePanelPackage(nl, routing, panel, gerber.files, jlc)
+  assert(pkg.some((f) => f.name === 'panel_Edge.gbr') && pkg.some((f) => f.name === 'panel_README.txt') && pkg.some((f) => f.name === 'panel_drill.drl'), 'package panel : contour + perçage + notice')
+  const pfcu = pkg.find((f) => f.name === 'panel_F_Cu.gbr')!
+  assert((pfcu.content.match(/%TF.GenerationSoftware/g) || []).length === 1, 'panel : attributs TF globaux une seule fois (copies assainies)')
+  assert((pfcu.content.match(/M02\*/g) || []).length === 1, 'panel : un seul M02 par fichier de cuivre')
+  const baseFcu = gerber.files.find((f) => f.name === 'F_Cu.gbr')!
+  assert(pfcu.content.length > baseFcu.content.length * 3, 'panel : cuivre réellement dupliqué (4 copies)')
 }
 
 /* ============ [P1.1] Pile 4 couches — signal/signal/masse/alim ============ */

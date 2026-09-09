@@ -6,10 +6,12 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Bot, CheckCircle2, Download, FileDown, Gauge, GitCompare, Package, Repeat, ShieldCheck,
+  Bot, CheckCircle2, Download, FileDown, Gauge, GitCompare, LayoutGrid, Minus, Package, Plus, Repeat, ShieldCheck,
   Thermometer, TriangleAlert, X, Zap,
 } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
+import { FABRICS, checkManufacturability, buildPanel, generatePanelPackage } from '@/lib/engine/panelizer'
+import { DEFAULT_RULES } from '@/lib/engine/rules'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -105,6 +107,22 @@ export function RightPanel() {
 
   // Export ODB++ en cours (compression tar+gz async)
   const [odbBusy, setOdbBusy] = useState(false)
+
+  // --- Panelisation production [P2.2] ---
+  const [fabId, setFabId] = useState(FABRICS[0].id)
+  const [panelCols, setPanelCols] = useState(2)
+  const [panelRows, setPanelRows] = useState(2)
+  const [panelMode, setPanelMode] = useState<'vcut' | 'bites'>('vcut')
+  const fabPreset = FABRICS.find((f) => f.id === fabId) ?? FABRICS[0]
+  const fabReport = useMemo(() => {
+    if (!result.routing) return null
+    return checkManufacturability(netlist, result.routing, fabPreset, DEFAULT_RULES)
+  }, [result.routing, fabPreset, netlist])
+  const panelGeo = useMemo(
+    () => buildPanel(netlist, { cols: panelCols, rows: panelRows, gapMm: 2, railMm: 5, mode: panelMode }),
+    [netlist, panelCols, panelRows, panelMode],
+  )
+  const [panelBusy, setPanelBusy] = useState(false)
 
   return (
     <Tabs defaultValue="pipeline" className="flex h-full flex-col gap-0">
@@ -506,6 +524,101 @@ export function RightPanel() {
               >
                 <Package className="h-3.5 w-3.5" /> {odbBusy ? 'Compression…' : 'Package ODB++ (.tgz)'}
               </Button>
+              {/* ---------- Panelisation production [audit P2.2] ---------- */}
+              {result.routing && result.placement && (
+                <div className="space-y-2 rounded-lg border border-amber-900/50 bg-amber-950/10 p-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1.5 text-[10px] font-bold tracking-wide text-amber-300">
+                      <LayoutGrid className="h-3 w-3" /> PANELISATION PRODUCTION
+                    </span>
+                    <Badge variant="outline" className={`h-4.5 border px-1.5 text-[9px] ${
+                      fabReport?.pass ? 'border-emerald-700 text-emerald-400' : 'border-red-700 text-red-400'
+                    }`}>
+                      {fabReport?.pass ? 'CONFORME' : 'NON CONFORME'}
+                    </Badge>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                    <select
+                      value={fabId}
+                      onChange={(e) => setFabId(e.target.value)}
+                      data-testid="fab-select"
+                      className="col-span-2 rounded border border-neutral-700 bg-black/50 px-2 py-1 text-[10px] text-amber-200 outline-none"
+                    >
+                      {FABRICS.map((f) => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={panelMode}
+                      onChange={(e) => setPanelMode(e.target.value as 'vcut' | 'bites')}
+                      className="rounded border border-neutral-700 bg-black/50 px-2 py-1 text-[10px] text-amber-200 outline-none"
+                    >
+                      <option value="vcut">Séparation : V-cut 30°</option>
+                      <option value="bites">Séparation : onglets ⌀0,6</option>
+                    </select>
+                    <div className="flex items-center justify-between rounded border border-neutral-700 bg-black/50 px-2 py-1">
+                      <span className="text-neutral-500">grille</span>
+                      <div className="flex items-center gap-1">
+                        {([['cols', panelCols, setPanelCols] as const, ['rows', panelRows, setPanelRows] as const]).map(([key, val, set]) => (
+                          <span key={key} className="flex items-center gap-0.5">
+                            <button
+                              onClick={() => set(Math.max(1, val - 1))}
+                              className="rounded bg-neutral-800 px-1 text-neutral-400 hover:bg-neutral-700"
+                            ><Minus className="h-2.5 w-2.5" /></button>
+                            <span className="w-8 text-center font-mono text-amber-200">{val}×{key === 'cols' ? panelRows : panelCols}</span>
+                            <button
+                              onClick={() => set(Math.min(4, val + 1))}
+                              className="rounded bg-neutral-800 px-1 text-neutral-400 hover:bg-neutral-700"
+                            ><Plus className="h-2.5 w-2.5" /></button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Conformité fabricant — valeur mesurée vs exigée */}
+                  {fabReport && (
+                    <div className="overflow-hidden rounded border border-neutral-800/60">
+                      {fabReport.checks.map((c) => (
+                        <div key={c.id} className="flex items-center gap-1.5 border-b border-neutral-900/60 bg-black/30 px-2 py-1 text-[9px] last:border-b-0">
+                          {c.ok
+                            ? <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-400" />
+                            : <TriangleAlert className="h-3 w-3 shrink-0 text-red-400" />}
+                          <span className="min-w-0 flex-1 truncate text-neutral-300" title={c.label}>{c.label}</span>
+                          <span className="font-mono text-neutral-500">{c.measured}</span>
+                          <span className="font-mono text-neutral-600">{c.required}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Gabarit panel */}
+                  <div className="flex items-center justify-between rounded border border-neutral-800/60 bg-black/30 px-2 py-1 text-[9px]">
+                    <span className="text-neutral-400">
+                      Panel <span className="font-mono text-amber-200">{panelGeo.panelW.toFixed(0)}×{panelGeo.panelH.toFixed(0)} mm</span>
+                      {' · '}{panelGeo.cols}×{panelGeo.rows} cartes
+                      {' · '}<span className="font-mono text-amber-200">{(panelGeo.utilization * 100).toFixed(0)} %</span> matière
+                    </span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    disabled={panelBusy || !result.gerber}
+                    className="w-full gap-2 border-amber-700 bg-amber-950/30 text-xs text-amber-300 hover:bg-amber-900/40"
+                    onClick={async () => {
+                      setPanelBusy(true)
+                      try {
+                        const pkg = generatePanelPackage(netlist, result.routing!, panelGeo, result.gerber!.files, fabPreset)
+                        pkg.forEach((f, i) => setTimeout(() => download(`${gerberDir}_${f.name}`, f.content), i * 250))
+                        useStudio.getState().log('system', 'agent',
+                          `[PANEL] Package exporté — ${panelGeo.cols}×${panelGeo.rows} copies, ${panelGeo.panelW.toFixed(0)}×${panelGeo.panelH.toFixed(0)} mm, ${panelGeo.mode === 'vcut' ? 'V-cut' : 'onglets'}, utilisation ${(panelGeo.utilization * 100).toFixed(0)} %, fabricant ${fabPreset.name} ${fabReport?.pass ? '(conforme)' : '(NON conforme — revue requise)'}`)
+                      } finally {
+                        setPanelBusy(false)
+                      }
+                    }}
+                    data-testid="export-panel"
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5" /> Télécharger le panel ({(netlist.board.layers >= 4 ? 4 : 2) + 3} fichiers)
+                  </Button>
+                </div>
+              )}
               <p className="text-[9px] leading-relaxed text-neutral-600">
                 Gerber X2 (RS-274X + attributs nets/composants/vias — rétrocompatible X1, format 3.6, mm) +
                 perçage Excellon + BOM/Pick&amp;Place + pinmap firmware + package ODB++ ASCII
