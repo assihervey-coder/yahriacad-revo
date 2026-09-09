@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800;900&display=swap" rel="stylesheet">
+  <style>
+    @page { size: 794px 1123px; margin: 0; }
+    :root {
+      --c-bg: #f3f4f4;
+      --c-accent: #31779a;
+      --c-text: #222526;
+      --c-muted: #787f82;
+      --c-mid: #3e5b6a;
+      --c-surface: #e8eaec;
+    }
+    html, body {
+      margin: 0; padding: 0;
+      width: 794px; height: 1123px;
+      background: var(--c-bg);
+      color: var(--c-text);
+      font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+    }
+    @media screen {
+      html { height: auto; display: flex; justify-content: center; min-height: 100vh; background: var(--c-bg); }
+      body { transform-origin: top center; scale: min(1, calc(100vw / 794), calc(100vh / 1123)); margin: 0 auto; box-shadow: 0 0 60px rgba(0,0,0,0.15); }
+    }
+    .cover { width: 794px; height: 1123px; position: relative; border: none; outline: none; box-shadow: none; }
+
+    /* Layer 1 — fond : grille technique, clip obligatoire */
+    .layer-1 { position: absolute; inset: 0; overflow: hidden; z-index: 1; }
+    .grid-bg {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(to right, rgba(34, 37, 38, 0.04) 0.5px, transparent 0.5px),
+        linear-gradient(to bottom, rgba(34, 37, 38, 0.04) 0.5px, transparent 0.5px);
+      background-size: 50px 50px;
+    }
+
+    /* Layer 2 — structure : ligne d'ancrage verticale ultra-épaisse */
+    .layer-2 { position: absolute; inset: 0; z-index: 2; }
+    .anchor-line {
+      position: absolute;
+      left: 95px; top: 112px; bottom: 112px;
+      width: 8px;
+      background: var(--c-accent);
+    }
+
+    /* Layer 3 — contenu */
+    .layer-3 { position: absolute; inset: 0; z-index: 3; }
+    .kicker {
+      position: absolute; left: 151px; top: 168px;
+      font-size: 16pt; font-weight: 400;
+      letter-spacing: 3pt; text-transform: uppercase;
+      color: var(--c-text); opacity: 0.6;
+      max-width: 560px;
+    }
+    .hero {
+      position: absolute; left: 151px; top: 300px;
+      font-size: 62pt; font-weight: 900; line-height: 1.15;
+      color: var(--c-text);
+      max-width: 580px;
+    }
+    .summary {
+      position: absolute; left: 151px; top: 588px;
+      font-size: 16.5pt; font-weight: 400; line-height: 1.6;
+      color: var(--c-text); opacity: 0.85;
+      max-width: 476px;
+    }
+    .meta {
+      position: absolute; left: 151px; top: 842px;
+      font-size: 17pt; font-weight: 300; line-height: 1.55;
+      color: var(--c-muted);
+    }
+    .meta b { font-weight: 600; color: var(--c-mid); }
+    .footer {
+      position: absolute; left: 151px; top: 1010px;
+      font-size: 16pt; font-weight: 400;
+      letter-spacing: 3pt; text-transform: uppercase;
+      color: var(--c-text); opacity: 0.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <div class="layer-1"><div class="grid-bg"></div></div>
+    <div class="layer-2"><div class="anchor-line"></div></div>
+    <div class="layer-3">
+      <div class="kicker">Audit technique de compl&eacute;tude</div>
+      <div class="hero">NEXUS<br>PCB</div>
+      <div class="summary">
+        Revue d&rsquo;architecture, grille de compl&eacute;tude fonctionnelle,
+        r&eacute;sultats de validation mesur&eacute;s et dettes techniques
+        de la plateforme de conception &eacute;lectronique par agents IA.
+      </div>
+      <div class="meta">
+        <b>P&eacute;rim&egrave;tre</b> &nbsp;moteur &middot; API &middot; interface &middot; int&eacute;grations<br>
+        <b>Version</b> &nbsp;1.0 &mdash; r&eacute;vision e21c796
+      </div>
+      <div class="footer">Studio NEXUS &middot; Septembre 2026</div>
+    </div>
+  </div>
+</body>
+</html>
