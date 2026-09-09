@@ -64,7 +64,7 @@ export function generateGerber(
   const viaCount = routing.routes.reduce((a, r) => a + r.vias.length, 0)
   const traceCount = routing.routes.reduce((a, r) => a + r.segments.length, 0)
 
-  const copperLayer = (layer: 0 | 1): string => {
+  const copperLayer = (layer: number): string => {
     const lines: string[] = [gerberHeader()]
     // Apertures (pistes + vias)
     for (const { def, d } of copperApertures.values()) {
@@ -122,22 +122,27 @@ export function generateGerber(
     for (const r of routing.routes) {
       for (const v of r.vias) lines.push(`X${fmt(v.x)}Y${fmt(v.y)}D03*`)
     }
-    // Plan de masse synthétique : flashes jointifs isolés (couche concernée)
-    const pourCells = layer === 0 ? routing.groundPour?.top : routing.groundPour?.bottom
-    if (pourCells && routing.groundPour) {
+    // Pour cuivre : plan de masse synthétique (2 couches) ou plans dédiés (4 couches [P1.1])
+    const pours: { cells: { x: number; y: number }[]; cols: number; rows: number; res: number }[] = []
+    if (routing.groundPour) {
       const gp = routing.groundPour
-      const pourSet = new Set([...gp.top, ...gp.bottom].map((c) => `${c.x},${c.y}`))
+      if (layer === 0) pours.push({ cells: gp.top, cols: gp.cols, rows: gp.rows, res: gp.res })
+      if (layer === 1) pours.push({ cells: gp.bottom, cols: gp.cols, rows: gp.rows, res: gp.res })
+    }
+    for (const p of routing.planes ?? []) if (p.layer === layer) pours.push(p)
+    for (const pour of pours) {
+      const pourSet = new Set(pour.cells.map((c) => `${c.x},${c.y}`))
       const neighborhoodFree = (x: number, y: number) => {
         for (let dy = -8; dy <= 8; dy += 2)
           for (let dx = -8; dx <= 8; dx += 2) {
-            if (!pourSet.has(`${Math.round((x + dx * gp.res) * 100) / 100},${Math.round((y + dy * gp.res) * 100) / 100}`)) return false
+            if (!pourSet.has(`${Math.round((x + dx * pour.res) * 100) / 100},${Math.round((y + dy * pour.res) * 100) / 100}`)) return false
           }
         return true
       }
       const pourD = dOf('POUR:0.6', 'C,0.6')
       lines.push(`D${pourD}*`)
-      for (let i = 0; i < pourCells.length; i += 2) {
-        const c = pourCells[i]
+      for (let i = 0; i < pour.cells.length; i += 2) {
+        const c = pour.cells[i]
         if (!neighborhoodFree(c.x, c.y)) continue
         lines.push(`X${fmt(c.x)}Y${fmt(c.y)}D03*`)
       }
@@ -202,9 +207,21 @@ export function generateGerber(
     '',
   ].join('\n')
 
+  const layerFiles: GerberFile[] = (nl.board.layers >= 4
+    ? [
+        { idx: 0, name: 'F_Cu.gbr', role: 'Cuivre supérieur (signal)' },
+        { idx: 1, name: 'In1_Cu.gbr', role: 'Cuivre interne 1 (signal)' },
+        { idx: 2, name: 'In2_Cu.gbr', role: 'Cuivre interne 2 (plan de masse)' },
+        { idx: 3, name: 'B_Cu.gbr', role: 'Cuivre inférieur (plan d\'alimentation)' },
+      ]
+    : [
+        { idx: 0, name: 'F_Cu.gbr', role: 'Cuivre supérieur' },
+        { idx: 1, name: 'B_Cu.gbr', role: 'Cuivre inférieur' },
+      ]
+  ).map(({ idx, name, role }) => ({ name, role, content: copperLayer(idx) }))
+
   const files: GerberFile[] = [
-    { name: 'F_Cu.gbr', role: 'Cuivre supérieur', content: copperLayer(0) },
-    { name: 'B_Cu.gbr', role: 'Cuivre inférieur', content: copperLayer(1) },
+    ...layerFiles,
     { name: 'Edge_Cuts.gbr', role: 'Contour de carte', content: outline },
     { name: 'drill.drl', role: 'Perçage (Excellon)', content: drillLines.join('\n') },
     { name: 'BOM.csv', role: 'Nomenclature', content: bom },

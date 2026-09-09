@@ -224,3 +224,24 @@ Work Log:
 Stage Summary:
 - Les 4 items P0 de l'audit sont soldés (P0.1 la veille + P0.2/P0.3/P0.4 ici) et le registre de risques perd son item code : le plafond replay ne tronque plus rien (ring buffer par tranches à mémoire bornée, tête de session compactée et rejouable), et la session s'exporte en JSON.
 - La régression est devenue bloquante : tout push exécute désormais la suite moteur + le smoke SSE, et l'E2E multi-résolutions est rejouable en une commande.
+
+---
+Task ID: 11
+Agent: Super Z (agent principal)
+Task: Achever P1.1 (pile 4 couches) et P1.2 (appariement strict des paires différentielles) — reprise du travail en cours (commit UUID), correction du bug d'appariement 2 couches, vérifications complètes, commit propre + push.
+
+Work Log:
+- Reprise : le commit en cours contenait le routeur 4 couches (plans L2 masse / L3 alim par flood-fill avec antipads de vias) et le squelette P1.2 (corridor + dents de peigne) — la suite moteur bloquait sur 1 échec : skew USB_DP/USB_DM de 20 mm en 2 couches (matched=false).
+- Diagnostic (NEXUS_DEBUG) : tunePairPath comparait la longueur d'UNE BRANCHE au TOTAL du partenaire (diff −24 mm puis −45 mm) → sur-méandration locale, besoin jamais couvert ; et le bonus de coût 0,5 dans le corridor rendait l'heuristique A* inadmissible → le 2ᵉ membre sortait systématiquement PLUS LONG que le 1ᵉʳ (82,5 vs 80,5 mm) — cas irrécupérable (on ne raccourcit pas une piste).
+- Refonte attemptRoute en 3 phases : (1) recherche brute de toutes les branches, (2) tunePairTree — méandres sur l'ARBRE COMPLET comparé au total partenaire, branches les plus longues d'abord, besoin résiduel transmis à la branche suivante, (3) construction segments/vias + émission live par branche.
+- buildPathSegments(ni, path) extrait (pur) : partagé par la passe glouton et la réconciliation — segments reconstruits à l'identique après méandration.
+- NetRouteState.paths : les chemins par branche (méandres inclus) sont enregistrés dans le store du routeur → la réconciliation peut méandrer un net DÉJÀ routé.
+- Passe 2c réécrite : au lieu de re-router la paire dans les deux orientations (lourd, perturbait les autres nets), elle méandre directement le membre le PLUS COURT (quel que soit son ordre de routage) en insérant des dents dans ses branches enregistrées (jamais sur le cuivre du partenaire ou d'un tiers), puis reconstruit ses segments et remet à jour les masques ; les dents n'ajoutent aucun via.
+- Bonus corridor 0,5 supprimé : le corridor RESTE réservé au couple (exclusivité keepout) mais sans biais de coût — A* redevient admissible.
+- Nettoyage : scripts de diagnostic one-off supprimés (debug-p11.ts, debug-pair.ts) — la suite canonique test-engine.ts couvre P1.1/P1.2.
+- Vérifications : tsc global 0 erreur ; suite moteur TOUS LES TESTS PASSENT (P1.2 : skew 0,00 mm · matched=true · gap 0,00 mm ; P1.1 : plans 40 725/40 717 cellules, DFM 87) ; smoke SSE OK (5 phases greedy→ripup→via-min→tune→pour, flux progressif) ; E2E navigateur : pipeline 2 couches (25/28, DFM 86, paire skew=0 matched=true) puis pile 4 COUCHES via le sélecteur du header (28/28 nets — 100 %, 47 vias, DFM 90/100, 0 erreur DRC, plans GND L2 / VDD_3V3 L3 rendus — textures pixel-exactes 40 629/40 621 px) ; routage LIVE SSE 4 couches (HTTP 200, complete, failed=false, 91 évts enregistrés, replay disponible) ; zéro erreur page et console. Captures /tmp/p11-4l-3d.png, /tmp/p11-4l-2d.png.
+
+Stage Summary:
+- La pile 4 couches signal/signal/masse/alim est opérationnelle de bout en bout (moteur, rendu 3D/2D, exports Gerber In1_Cu/In2_Cu) : 28/28 nets à 100 % dans le navigateur (contre 25/28 en bicouche), DFM 90/100.
+- L'appariement différentiel est STRICT et bidirectionnel : le membre court est méandré où qu'il se trouve dans l'ordre de routage — skew 0,00 mm mesuré.
+- La passe de réconciliation est devenue déterministe et non destructive : plus de re-routage complet de la paire, seulement des dents de peigne insérées dans les chemins enregistrés.

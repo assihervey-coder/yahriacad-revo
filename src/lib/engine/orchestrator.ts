@@ -69,6 +69,8 @@ export async function runPipeline(
   }
   cb.onLog('import', 'info', `Netlist validée : ${parsed.stats.components} composants, ${parsed.stats.nets} nets, ${parsed.stats.connectedPins} broches connectées`)
   cb.onLog('import', 'info', `Carte : ${parsed.stats.boardMm}`)
+  if (nl.board.layers >= 4)
+    cb.onLog('import', 'info', 'Pile 4 couches [P1.1] : F.Cu signal · In1.Cu signal · In2.Cu masse · B.Cu alim — signaux sur la paire supérieure, rails principaux sur plans dédiés')
   const cls = parsed.stats.netClasses
   cb.onLog('import', 'info', `Classes de signaux : ${Object.entries(cls).map(([k, v]) => `${k}×${v}`).join(' · ')}`)
   cb.onStage('import', 'done', 1, `${parsed.stats.components} composants · ${parsed.stats.nets} nets`, 0)

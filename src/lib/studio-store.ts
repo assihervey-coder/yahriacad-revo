@@ -117,6 +117,8 @@ interface StudioState {
   /** Composant en cours de drag & drop souris (null = aucun) */
   dragRef: string | null
   setProject: (id: string) => void
+  /** [P1.1] pile de couches cuivre du projet courant (2 ou 4) — copie superficielle de la netlist */
+  setLayers: (n: 2 | 4) => void
   addCustomNetlist: (nl: Netlist) => void
   surgicalMove: (ref: string, dx: number, dy: number) => Promise<void>
   log: (stage: LogEntry['stage'], level: LogEntry['level'], msg: string) => void
@@ -498,6 +500,9 @@ export const useStudio = create<StudioState>((set, get) => ({
     })
     void get().loadHistory()
   },
+
+  // [P1.1] pile de couches : copie superficielle — les NETLISTS partagées ne sont jamais mutées
+  setLayers: (n) => set((s) => ({ netlist: { ...s.netlist, board: { ...s.netlist.board, layers: n } } })),
 
   addCustomNetlist: (nl) => {
     set((s) => ({ customNetlists: [...s.customNetlists.filter((x) => x.id !== nl.id), nl] }))

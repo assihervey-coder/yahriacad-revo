@@ -128,6 +128,30 @@ export default function BoardViewer2D() {
       ctx.imageSmoothingEnabled = true
     }
 
+    // Plans cuivre dédiés 4 couches [P1.1] : masse (vert) et alim (ambre), sous les pistes
+    if (viewer.showTraces && routing?.planes?.length) {
+      const drawPlane = (cells: { x: number; y: number }[], cols: number, rows: number, res: number, fill: string, alpha: number) => {
+        const tex = document.createElement('canvas')
+        tex.width = cols
+        tex.height = rows
+        const tctx = tex.getContext('2d')
+        if (!tctx) return
+        tctx.fillStyle = fill
+        for (const c of cells) {
+          const cx = Math.floor(c.x / res)
+          const cy = Math.floor(c.y / res)
+          if (cx >= 0 && cx < cols && cy >= 0 && cy < rows) tctx.fillRect(cx, cy, 1, 1)
+        }
+        ctx.imageSmoothingEnabled = false
+        ctx.globalAlpha = alpha
+        ctx.drawImage(tex, X(0), Y(0), W * s, H * s)
+      }
+      for (const p of routing.planes)
+        drawPlane(p.cells, p.cols, p.rows, p.res, p.cls === 'ground' ? '#2b8a5f' : '#a16207', p.cls === 'ground' ? 0.32 : 0.26)
+      ctx.globalAlpha = 1
+      ctx.imageSmoothingEnabled = true
+    }
+
     // Heatmap thermique (texture offscreen + palette inferno)
     if (viewer.showHeatmap && result.thermal) {
       const th = result.thermal
@@ -170,7 +194,7 @@ export default function BoardViewer2D() {
         for (const seg of r.segments) {
           if (seg.pts.length < 2) continue
           ctx.strokeStyle = color
-          ctx.globalAlpha = seg.layer === 0 ? 0.95 : 0.5 // couche bottom atténuée
+          ctx.globalAlpha = [0.95, 0.6, 0.45, 0.4][seg.layer] ?? 0.95 // couches profondes atténuées
           ctx.lineWidth = Math.max(1, seg.width * s)
           ctx.beginPath()
           ctx.moveTo(X(seg.pts[0].x), Y(seg.pts[0].y))

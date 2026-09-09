@@ -16,6 +16,9 @@ import BoardViewer2D from './board-viewer-2d'
 import { LiveRoutingHud } from './live-hud'
 import type { PlacedComponent, Route, ThermalMap } from '@/lib/engine/types'
 
+/** Hauteurs de rendu des couches cuivre (0 = F.Cu … 3 = B.Cu) — pile 4 couches [P1.1] */
+const LAYER_Y = [0.87, 0.29, -0.29, -0.87]
+
 /** Détection WebGL sans exception — évite le crash « THREE.WebGLRenderer »
  *  sur les systèmes restreints (AllowWebgl2:false, VM, GPU bloqué). */
 function isWebGLAvailable(): boolean {
@@ -473,7 +476,7 @@ export default function BoardViewer() {
           const bx = seg.pts[i].x - W / 2, bz = seg.pts[i].y - H / 2
           const len = Math.hypot(bx - ax, bz - az)
           if (len < 0.01) continue
-          const y = seg.layer === 0 ? 0.87 : -0.87
+          const y = LAYER_Y[seg.layer] ?? 0.87
           const geo = new THREE.BoxGeometry(len + seg.width, 0.07, seg.width)
           const m = new THREE.Mesh(geo, mat)
           m.position.set((ax + bx) / 2, y, (az + bz) / 2)
@@ -535,43 +538,52 @@ export default function BoardViewer() {
     mat.needsUpdate = true
   }, [result.thermal, viewer.showHeatmap])
 
-  /* ---------------- Plan de masse synthétique ---------------- */
+  /* ---------------- Plans cuivre : pour de masse (2c) ou plans dédiés (4c [P1.1]) ---------------- */
   useEffect(() => {
     const eng = engineRef.current
     if (!eng) return
     const gp = result.routing?.groundPour
-    if (!viewer.showTraces || !gp) {
+    const planes = result.routing?.planes
+    if (!viewer.showTraces || (!gp && !planes?.length)) {
       eng.pourMesh.visible = false
       eng.pourMeshTop.visible = false
       return
     }
-    const buildTex = (cells: { x: number; y: number }[]) => {
+    const buildTex = (cells: { x: number; y: number }[], cols: number, rows: number, res: number) => {
       const canvas = document.createElement('canvas')
-      canvas.width = gp.cols
-      canvas.height = gp.rows
+      canvas.width = cols
+      canvas.height = rows
       const ctx = canvas.getContext('2d')
       if (!ctx) return null
-      ctx.clearRect(0, 0, gp.cols, gp.rows)
+      ctx.clearRect(0, 0, cols, rows)
       ctx.fillStyle = '#2b8a5f'
       for (const c of cells) {
-        const cx = Math.floor(c.x / gp.res)
-        const cy = Math.floor(c.y / gp.res)
-        ctx.fillRect(cx, gp.rows - 1 - cy, 1, 1)
+        const cx = Math.floor(c.x / res)
+        const cy = Math.floor(c.y / res)
+        ctx.fillRect(cx, rows - 1 - cy, 1, 1)
       }
       const tex = new THREE.CanvasTexture(canvas)
       tex.magFilter = THREE.NearestFilter
       return tex
     }
-    const matB = eng.pourMesh.material as THREE.MeshBasicMaterial
-    matB.map?.dispose()
-    matB.map = buildTex(gp.bottom)
-    matB.needsUpdate = true
-    eng.pourMesh.visible = true
-    const matT = eng.pourMeshTop.material as THREE.MeshBasicMaterial
-    matT.map?.dispose()
-    matT.map = buildTex(gp.top)
-    matT.needsUpdate = true
-    eng.pourMeshTop.visible = true
+    const apply = (mesh: THREE.Mesh, cells: { x: number; y: number }[], cols: number, rows: number, res: number, color: number) => {
+      const mat = mesh.material as THREE.MeshBasicMaterial
+      mat.map?.dispose()
+      mat.map = buildTex(cells, cols, rows, res)
+      mat.color.setHex(color)
+      mat.needsUpdate = true
+      mesh.visible = true
+    }
+    if (gp) {
+      apply(eng.pourMesh, gp.bottom, gp.cols, gp.rows, gp.res, 0x1f6f4a)
+      apply(eng.pourMeshTop, gp.top, gp.cols, gp.rows, gp.res, 0x1f6f4a)
+    } else if (planes) {
+      const masse = planes.find((p) => p.cls === 'ground') ?? planes[0]
+      apply(eng.pourMesh, masse.cells, masse.cols, masse.rows, masse.res, 0x1f6f4a)
+      const alim = planes.find((p) => p.cls === 'power')
+      if (alim) apply(eng.pourMeshTop, alim.cells, alim.cols, alim.rows, alim.res, 0x92600a)
+      else eng.pourMeshTop.visible = false
+    }
   }, [result.routing, viewer.showTraces])
 
   /* ---------------- Keepout RF ---------------- */
@@ -609,8 +621,8 @@ export default function BoardViewer() {
     eng.compGroup.visible = viewer.showComponents
     eng.traceGroup.visible = viewer.showTraces
     eng.heatMesh.visible = viewer.showHeatmap && !!result.thermal
-    eng.pourMesh.visible = viewer.showTraces && !!result.routing?.groundPour
-    eng.pourMeshTop.visible = viewer.showTraces && !!result.routing?.groundPour
+    eng.pourMesh.visible = viewer.showTraces && !!(result.routing?.groundPour || result.routing?.planes?.length)
+    eng.pourMeshTop.visible = viewer.showTraces && !!(result.routing?.groundPour || result.routing?.planes?.length)
   }, [viewer.showComponents, viewer.showTraces, viewer.showHeatmap, result.thermal, result.routing])
 
   /* ---------------- Mode 2D / 3D ---------------- */

@@ -36,7 +36,8 @@ const PHASE_LABEL: Record<string, string> = {
   greedy: 'Routeur A* — pose des pistes, trait par trait',
   ripup: 'Rip-up & reroute — déblocage des nets coincés',
   'via-min': 'Minimisation des vias [DeepPCB]',
-  pour: 'Plan de masse synthétique',
+  tune: 'Appariement des paires différentielles — méandres de longueur [P1.2]',
+  pour: 'Plans cuivre — masse / alim (pour)',
   done: 'Finalisation…',
   idle: '',
 }

@@ -96,7 +96,9 @@ export function extractConstraints(nl: Netlist): Constraint[] {
   const diffNets = nl.nets.filter((n) => n.cls === 'diffpair')
   const dpGroups: Record<string, string[]> = {}
   for (const n of diffNets) {
-    const base = n.name.replace(/[Pp]\+?$|N-?$/, '').replace(/_?[Dd][Pp]$|_?[Dd][Mm]$/, '') || n.name
+    // suffixes DP/DM d'abord (sinon [Pp]\+? avale le P final de « _DP »),
+    // puis P+/N- (LVDS) — « USB_DP » et « USB_DM » partagent bien la base « USB »
+    const base = n.name.replace(/_?[Dd][Pp]$|_?[Dd][Mm]$|[Pp]\+?$|[Nn]-?$/, '').replace(/_$/, '') || n.name
     ;(dpGroups[base] ??= []).push(n.name)
   }
   for (const [base, nets] of Object.entries(dpGroups)) {

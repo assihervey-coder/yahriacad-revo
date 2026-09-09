@@ -198,15 +198,23 @@ export function analyzeSi(
     if (n.cls === 'rf') comment = ok
       ? `Ligne 50 Ω respectée (piste large ${w} mm sur FR4 1,6 mm)`
       : `Écart d'impédance : cible ${target} Ω, calculée ${z0.toFixed(1)} Ω`
-    else if (n.cls === 'diffpair') comment = `Paire USB : Z0 ${z0.toFixed(1)} Ω vs cible 90 Ω — sur 2 couches, écart accepté avec couche de masse contiguë`
+    else if (n.cls === 'diffpair') {
+      // [P1.2] appariement strict : skew et gap mesurés par le routeur
+      const pr = r?.pair
+      comment = pr
+        ? `Paire ${pr.partner} : Z0 ${z0.toFixed(1)} Ω vs cible 90 Ω · skew ${pr.skewMm.toFixed(2)} mm ${pr.matched ? '≤ 0,5 mm ✓' : '> 0,5 mm — serpentin requis'} · gap ${pr.gapMm.toFixed(2)} mm`
+        : `Paire USB : Z0 ${z0.toFixed(1)} Ω vs cible 90 Ω — routage apparié en attente`
+    }
     else comment = `Net haute vitesse ${n.name} : ${len.toFixed(1)} mm, Z0 ${z0.toFixed(1)} Ω`
     const xt = xtalk.get(n.name)
+    const pr = n.cls === 'diffpair' ? routes.get(n.name)?.pair : undefined
     if (xt) {
       comment += ` · diaphonie ${xt.pct.toFixed(1)} % (accouplement avec ${xt.with})`
     }
     metrics.push({
       net: n.name, cls: n.cls, lengthMm: Math.round(len * 10) / 10,
       impedance: Math.round(z0 * 10) / 10, targetImpedance: target, impedanceOk: ok,
+      ...(pr ? { skewMm: pr.skewMm, skewOk: pr.matched } : {}),
       ...(xt ? { crosstalkPct: xt.pct, crosstalkOk: xt.pct < 15, crosstalkWith: xt.with } : {}),
       comment,
     })

@@ -110,5 +110,60 @@ for (const nl of NETLISTS) {
   assert(drill.content.includes('M48'), 'Excellon : en-tête M48')
 }
 
+/* ============ [P1.1] Pile 4 couches — signal/signal/masse/alim ============ */
+console.log('\n════════ P1.1 — Pile 4 couches (NEXUS-CORE) ════════')
+{
+  const base = NETLISTS[0]
+  const nl4 = { ...base, board: { ...base.board, layers: 4 } }
+  const constraints4 = extractConstraints(nl4)
+  const plan4 = ruleBasedPlan(nl4)
+  const placement4 = optimizePlacement(nl4, plan4, constraints4, { iterations: 9000 })
+  const routing4 = await routeAll(nl4, placement4.placements, DEFAULT_RULES, constraints4)
+  const rate4 = routing4.routedNets / routing4.totalNets
+  assert(rate4 >= 0.75, `routage 4 couches ${routing4.routedNets}/${routing4.totalNets} (${(rate4 * 100).toFixed(0)} %) — ${routing4.viaCount} vias, ${routing4.totalLengthMm.toFixed(0)} mm`)
+  assert(!!routing4.planes && routing4.planes.length === 2, `plans cuivre générés : ${routing4.planes?.map((p) => `L${p.layer} ${p.net}`).join(' + ') ?? 'aucun'}`)
+  const masse = routing4.planes?.find((p) => p.cls === 'ground')
+  const alim = routing4.planes?.find((p) => p.cls === 'power')
+  assert(!!masse && masse.layer === 2 && masse.cells.length > 0, `plan de masse sur In2.Cu (L2) — ${masse?.cells.length ?? 0} cellules`)
+  assert(!!alim && alim.layer === 3 && alim.cells.length > 0, `plan d'alim sur B.Cu (L3) — ${alim?.cells.length ?? 0} cellules`)
+  const gndRoute = routing4.routes.find((r) => r.net === 'GND')
+  const pwrRoute = routing4.routes.find((r) => r.net === 'VDD_3V3')
+  assert(!!gndRoute?.routed && !!gndRoute.pour, 'masse connectée par son plan dédié (pour)')
+  assert(!!pwrRoute?.routed && !!pwrRoute.pour, 'rail principal VDD_3V3 connecté par son plan dédié (pour)')
+  for (const r of routing4.routes.filter((x) => !x.routed)) console.log(`    ⚠ non routé : ${r.net} — ${r.failureReason}`)
+
+  const drc4 = runDrc(nl4, placement4.placements, routing4, solveThermal(nl4, placement4.placements), DEFAULT_RULES, constraints4)
+  assert(drc4.violations.filter((v) => v.code === 'DRC-OVERLAP').length === 0, '4 couches : aucun chevauchement de composants')
+  const dfm4 = runDfm(nl4, placement4.placements, routing4, DEFAULT_RULES)
+  assert(dfm4.score >= 60, `DFM 4 couches ${dfm4.score}/100`)
+  assert(dfm4.checks.some((c) => c.name.includes('Plans cuivre')), 'DFM : contrôle « plans cuivre dédiés » présent')
+
+  const gerber4 = generateGerber(nl4, placement4.placements, routing4)
+  assert(gerber4.files.length === 8, `export 4 couches : ${gerber4.files.length} fichiers (F_Cu, In1_Cu, In2_Cu, B_Cu + contour + drill + BOM + POS)`)
+  const in2 = gerber4.files.find((f) => f.name === 'In2_Cu.gbr')!
+  assert(!!in2 && in2.content.includes('D03'), 'Gerber In2_Cu.gbr : flashes du plan de masse présents')
+  const bcu4 = gerber4.files.find((f) => f.name === 'B_Cu.gbr')!
+  assert(!!bcu4 && bcu4.content.includes('D03'), 'Gerber B_Cu.gbr : flashes du plan d\u2019alim présents')
+}
+
+/* ============ [P1.2] Appariement strict des paires différentielles ============ */
+console.log('\n════════ P1.2 — Paire différentielle USB (NEXUS-CORE, 2 couches) ════════')
+{
+  const base = NETLISTS[0]
+  const constraints2 = extractConstraints(base)
+  const plan2 = ruleBasedPlan(base)
+  const placement2 = optimizePlacement(base, plan2, constraints2, { iterations: 9000 })
+  const routing2 = await routeAll(base, placement2.placements, DEFAULT_RULES, constraints2)
+  const dp = routing2.routes.find((r) => r.net === 'USB_DP')
+  const dm = routing2.routes.find((r) => r.net === 'USB_DM')
+  assert(!!dp?.pair && !!dm?.pair, `paire détectée : ${dp?.pair ? `USB_DP ↔ ${dp.pair.partner}` : '—'} · ${dm?.pair ? `USB_DM ↔ ${dm.pair.partner}` : '—'}`)
+  if (dp?.pair && dm?.pair) {
+    console.log(`    skew ${dp.pair.skewMm.toFixed(2)} mm · gap ${dp.pair.gapMm.toFixed(2)} mm · matched=${dp.pair.matched}`)
+    assert(dp.pair.matched, `appariement de longueur : skew ${dp.pair.skewMm.toFixed(2)} mm ≤ 0,5 mm`)
+    assert(dp.pair.gapMm <= 2.5, `espacement contrôlé : gap ${dp.pair.gapMm.toFixed(2)} mm ≤ 2,5 mm`)
+    assert(dp.pair.skewMm === dm.pair.skewMm && dp.pair.gapMm === dm.pair.gapMm, 'métadonnées cohérentes entre les deux membres')
+  }
+}
+
 console.log('\n' + (failures === 0 ? '🎉 TOUS LES TESTS PASSENT' : `💥 ${failures} ÉCHEC(S)`))
 process.exit(failures === 0 ? 0 : 1)

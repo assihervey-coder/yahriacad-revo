@@ -148,7 +148,10 @@ export interface PlacementSolution {
 
 export interface TraceSegment {
   net: string
-  layer: 0 | 1          // 0 = top (F.Cu), 1 = bottom (B.Cu)
+  /** Indice de couche cuivre : 0 = F.Cu (top), 1 = In1.Cu, 2 = In2.Cu, 3 = B.Cu.
+   *  Pile 2 couches : 0 = top signal, 1 = bottom. Pile 4 couches [P1.1] :
+  *  signaux sur la paire 0/1, plans masse (2) et alim (3) en pour. */
+  layer: number
   /** Polyline orthogonale (mm) */
   pts: { x: number; y: number }[]
   width: number
@@ -170,6 +173,8 @@ export interface Route {
   routed: boolean
   /** connecté via plan de masse synthétique (copper pour B.Cu) */
   pour?: boolean
+  /** [P1.2] appariement strict de paire différentielle (corridor + méandres) */
+  pair?: { partner: string; skewMm: number; gapMm: number; matched: boolean }
   failureReason?: string
 }
 
@@ -190,6 +195,19 @@ export interface RoutingSolution {
     rows: number
     res: number
   }
+  /** [P1.1] plans cuivre dédiés de la pile 4 couches (masse L2, alim L3) */
+  planes?: PlanePour[]
+}
+
+/** Plan cuivre généré par flood-fill sur une couche dédiée (pile 4 couches) */
+export interface PlanePour {
+  layer: number
+  net: string
+  cls: 'ground' | 'power'
+  cells: { x: number; y: number }[]
+  cols: number
+  rows: number
+  res: number
 }
 
 /* ------------------------- Simulation ------------------------- */

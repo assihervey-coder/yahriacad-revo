@@ -141,6 +141,16 @@ export function runDrc(
     }
   }
 
+  /* 7. [P1.2] Paires différentielles : appariement de longueur (skew) */
+  for (const r of routing.routes) {
+    if (!r.pair || r.pair.matched) continue
+    v.push({
+      code: 'DRC-PAIR', severity: 'warning',
+      message: `Paire ${r.net} ↔ ${r.pair.partner} : skew ${r.pair.skewMm.toFixed(2)} mm > tolérance 0,5 mm — serpentin recommandé`,
+      refs: [r.net, r.pair.partner],
+    })
+  }
+
   const errors = v.filter((x) => x.severity === 'error').length
   const warnings = v.filter((x) => x.severity === 'warning').length
   return {
@@ -217,6 +227,18 @@ export function runDfm(
     detail: `${(routeRate * 100).toFixed(1)} % des nets routés (${routing.routedNets}/${routing.totalNets})`,
   })
   if (routeRate < 0.98) score -= Math.round((1 - routeRate) * 40)
+
+  // [P1.1] Plans cuivre dédiés (pile 4 couches)
+  const planes = routing.planes ?? []
+  if (planes.length > 0) {
+    const cov = planes.reduce((a, p) => a + p.cells.length, 0) / planes.reduce((a, p) => a + p.cols * p.rows, 0)
+    checks.push({
+      name: 'Plans cuivre dédiés (4 couches)',
+      pass: cov >= 0.55,
+      detail: `${planes.map((p) => `L${p.layer} ${p.net}`).join(' + ')} — couverture ${(cov * 100).toFixed(0)} %`,
+    })
+    if (cov < 0.55) score -= 5
+  }
 
   return {
     score: Math.max(0, Math.min(100, Math.round(score))),

@@ -32,6 +32,8 @@ export function StudioHeader() {
   const liveRouting = useStudio((s) => s.liveRouting)
   const hasPlacement = useStudio((s) => !!(s.livePlacements ?? s.result.placement))
   const setProject = useStudio((s) => s.setProject)
+  const setLayers = useStudio((s) => s.setLayers)
+  const storeNl = useStudio((s) => s.netlist)
   const addCustomNetlist = useStudio((s) => s.addCustomNetlist)
   const log = useStudio((s) => s.log)
 
@@ -123,7 +125,26 @@ export function StudioHeader() {
         <Radio className="h-3.5 w-3.5" /> Routage live
       </Button>
 
-      <div className="hidden text-[11px] text-neutral-500 md:block">{nl.board.w}×{nl.board.h} mm · 2 couches · FR4</div>
+      <div className="hidden items-center gap-2 md:flex">
+        <div className="text-[11px] text-neutral-500">{nl.board.w}×{nl.board.h} mm · FR4</div>
+        <Select
+          value={String(storeNl.board.layers >= 4 ? 4 : 2)}
+          onValueChange={(v) => setLayers(Number(v) as 2 | 4)}
+          disabled={running || liveRouting.active}
+        >
+          <SelectTrigger
+            className="h-7 w-[110px] border-emerald-900/60 bg-black/40 text-[11px] text-emerald-100"
+            aria-label="Pile de couches cuivre"
+            title="Pile 4 couches [P1.1] : F.Cu signal · In1.Cu signal · In2.Cu masse · B.Cu alim"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="border-emerald-900 bg-[#0a130d] text-emerald-100">
+            <SelectItem value="2" className="text-[11px]">2 couches</SelectItem>
+            <SelectItem value="4" className="text-[11px]">4 couches</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
       <div className="ml-auto flex items-center gap-2.5">
         {done && drcSummary && (
