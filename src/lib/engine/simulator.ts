@@ -13,7 +13,7 @@ import type { PlacedComponent } from './types'
 
 /* ============================== THERMIQUE ============================== */
 
-const AMBIENT = 22.0          // °C
+export const AMBIENT = 22.0           // °C
 
 /**
  * Solveur thermique en différences finies.

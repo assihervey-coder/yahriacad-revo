@@ -21,6 +21,9 @@ import {
   FABRICS, checkManufacturability, buildPanel, offsetGerber, generatePanelPackage,
   type FabPreset,
 } from '../src/lib/engine/panelizer'
+import { calibrateThermalModel, calibratedDeltaT, impedanceProfile, truthSensitiveDeltaT } from '../src/lib/engine/calibration'
+import { buildEvalContext } from '../src/lib/engine/world-model'
+import { AMBIENT } from '../src/lib/engine/simulator'
 import { DEFAULT_RULES } from '../src/lib/engine/rules'
 
 let failures = 0
@@ -170,6 +173,24 @@ for (const nl of NETLISTS) {
   assert((pfcu.content.match(/M02\*/g) || []).length === 1, 'panel : un seul M02 par fichier de cuivre')
   const baseFcu = gerber.files.find((f) => f.name === 'F_Cu.gbr')!
   assert(pfcu.content.length > baseFcu.content.length * 3, 'panel : cuivre réellement dupliqué (4 copies)')
+
+  // ---- P2.3 — Calibration corrélation modèle latent ↔ simulation ----
+  const cal = calibrateThermalModel(nl, plan, constraints, { samples: 12, seed: 7, anchor: placement.placements })
+  assert(Number.isFinite(cal.r) && Math.abs(cal.r) <= 1, 'calibration : corrélation de Pearson bornée')
+  assert(cal.r > 0.55, `calibration : corrélation latent ↔ ΔT sensibles r = ${cal.r.toFixed(3)} (${cal.samples + 1} échantillons+ancre, ΔT max carte r = ${cal.rMax.toFixed(2)} — métrique distincte)`)
+  assert(cal.slope > 0, `calibration : pente ${cal.slope.toFixed(3)} °C/unité latente, intercept ${cal.intercept.toFixed(1)}`)
+  assert(Number.isFinite(cal.rmse) && cal.rmse > 0 && Number.isFinite(cal.maxErr), `calibration : RMSE ${cal.rmse.toFixed(1)} °C, err max ${cal.maxErr.toFixed(1)} °C`)
+  const ctxCal = buildEvalContext(nl, plan, constraints)
+  const realMap = new Map(placement.placements.map((p) => [p.ref, p]))
+  const truthDT = truthSensitiveDeltaT(ctxCal, nl, placement.placements)
+  const estDT = calibratedDeltaT(cal, ctxCal, realMap)
+  assert(
+    Number.isFinite(estDT) && estDT >= 0 && Math.abs(estDT - truthDT) <= Math.max(cal.maxErr, 8),
+    `prédiction calibrée sur solution réelle : ${estDT.toFixed(1)} °C vs FDM ${truthDT.toFixed(1)} °C (cohérente avec err max du fit ${cal.maxErr.toFixed(1)} °C)`,
+  )
+  const zi = impedanceProfile(DEFAULT_RULES)
+  assert(zi.length >= 7 && zi.every((z) => z.z0 > 0), `profil d'impédance : ${zi.length} classes (Z0 > 0)`)
+  assert(Math.abs((zi.find((z) => z.cls === 'rf')?.z0 ?? 0) - 50) < 40, `RF 2,8 mm : Z0 ${(zi.find((z) => z.cls === 'rf')?.z0 ?? 0).toFixed(1)} Ω ≈ cible 50 Ω`)
 }
 
 /* ============ [P1.1] Pile 4 couches — signal/signal/masse/alim ============ */

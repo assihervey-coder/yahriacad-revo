@@ -12,6 +12,14 @@ import {
 import { useStudio } from '@/lib/studio-store'
 import { FABRICS, checkManufacturability, buildPanel, generatePanelPackage } from '@/lib/engine/panelizer'
 import { DEFAULT_RULES } from '@/lib/engine/rules'
+import { extractConstraints } from '@/lib/engine/parser'
+import { ruleBasedPlan } from '@/lib/engine/llm-agent'
+import {
+  calibrateThermalModel, calibratedDeltaT, impedanceProfile,
+  type ThermalCalibration,
+} from '@/lib/engine/calibration'
+import { buildEvalContext } from '@/lib/engine/world-model'
+import { AMBIENT } from '@/lib/engine/simulator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -123,6 +131,52 @@ export function RightPanel() {
     [netlist, panelCols, panelRows, panelMode],
   )
   const [panelBusy, setPanelBusy] = useState(false)
+
+  // --- Calibration corrélation modèle ↔ simulation [P2.3] ---
+  const [calBusy, setCalBusy] = useState(false)
+  const [thermalCal, setThermalCal] = useState<ThermalCalibration | null>(null)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`nexus-cal-${netlist.id}`)
+      setThermalCal(raw ? (JSON.parse(raw) as ThermalCalibration) : null)
+    } catch {
+      setThermalCal(null)
+    }
+  }, [netlist.id])
+  const calCtx = useMemo(
+    () => buildEvalContext(netlist, plan ?? ruleBasedPlan(netlist), extractConstraints(netlist)),
+    [netlist, plan],
+  )
+  const calEst = useMemo(() => {
+    if (!thermalCal || !result.placement) return null
+    const map = new Map(result.placement.placements.map((p) => [p.ref, p]))
+    return calibratedDeltaT(thermalCal, calCtx, map)
+  }, [thermalCal, result.placement, calCtx])
+  const ziProfile = useMemo(() => impedanceProfile(DEFAULT_RULES), [])
+  const runCalibration = () => {
+    if (calBusy) return
+    setCalBusy(true)
+    // Laisse le badge « calibration… » se peindre avant le blocage FDM (sync)
+    setTimeout(() => {
+      try {
+        const anchor = result.placement?.placements
+        const cal = calibrateThermalModel(netlist, plan ?? ruleBasedPlan(netlist), extractConstraints(netlist), {
+          samples: 16,
+          anchor,
+        })
+        setThermalCal(cal)
+        try {
+          localStorage.setItem(`nexus-cal-${netlist.id}`, JSON.stringify(cal))
+        } catch {
+          /* quota — la calibration reste en mémoire pour la session */
+        }
+        useStudio.getState().log('system', 'agent',
+          `[CALIBRATION] Modèle latent calibré sur FDM — r = ${cal.r.toFixed(3)}, pente ${cal.slope.toFixed(3)} °C/u, RMSE ${cal.rmse.toFixed(1)} °C (${cal.samples + (anchor ? 1 : 0)} échantillons+ancre)`)
+      } finally {
+        setCalBusy(false)
+      }
+    }, 30)
+  }
 
   return (
     <Tabs defaultValue="pipeline" className="flex h-full flex-col gap-0">
@@ -401,6 +455,92 @@ export function RightPanel() {
               </div>
             </section>
           )}
+
+          {/* Corrélation des modèles — calibration [P2.3] */}
+          <section className="rounded-lg border border-cyan-900/40 bg-black/30 p-3" data-testid="calibration-card">
+            <div className="mb-1.5 flex items-center gap-2">
+              <Thermometer className="h-4 w-4 text-cyan-400" />
+              <span className="text-[11px] font-semibold text-cyan-200">Corrélation modèle ↔ simulation</span>
+              {thermalCal && (
+                <Badge variant="outline" className={`ml-auto h-4.5 border px-1.5 text-[9px] ${
+                  thermalCal.r >= 0.85 ? 'border-emerald-700 text-emerald-400'
+                  : thermalCal.r >= 0.6 ? 'border-cyan-700 text-cyan-300'
+                  : 'border-amber-700 text-amber-400'
+                }`}>
+                  r = {thermalCal.r.toFixed(3)}
+                </Badge>
+              )}
+            </div>
+            <p className="mb-2 text-[9px] leading-relaxed text-neutral-500">
+              Le noyau latent (1/(1+r²), µs) est confronté au solveur FDM (vérité terrain) sur des placements
+              aléatoires légaux + la solution opérante (ancre). La droite de calibration mappe l&apos;unité latente vers
+              le °C : ΔT moyen aux composants sensibles — cible exacte du noyau.
+            </p>
+            {thermalCal ? (
+              <>
+                <div className="mb-2 grid grid-cols-4 gap-1.5 text-center">
+                  <div className="rounded-md bg-black/40 py-1.5">
+                    <div className="font-mono text-sm font-bold text-cyan-300">{thermalCal.r.toFixed(3)}</div>
+                    <div className="text-[8px] text-neutral-500">corrélation r</div>
+                  </div>
+                  <div className="rounded-md bg-black/40 py-1.5">
+                    <div className="font-mono text-sm font-bold text-cyan-300">{thermalCal.slope.toFixed(3)}</div>
+                    <div className="text-[8px] text-neutral-500">°C / unité</div>
+                  </div>
+                  <div className="rounded-md bg-black/40 py-1.5">
+                    <div className="font-mono text-sm font-bold text-cyan-300">{thermalCal.rmse.toFixed(1)}</div>
+                    <div className="text-[8px] text-neutral-500">RMSE °C</div>
+                  </div>
+                  <div className="rounded-md bg-black/40 py-1.5">
+                    <div className="font-mono text-sm font-bold text-cyan-300">{thermalCal.samples + 1}</div>
+                    <div className="text-[8px] text-neutral-500">échant.+ancre</div>
+                  </div>
+                </div>
+                {calEst !== null && (
+                  <div className="mb-2 flex items-center justify-between rounded-md bg-black/40 px-2.5 py-1.5 text-[9px]">
+                    <span className="text-neutral-500">ΔT sensibles du placement courant (prédiction calibrée)</span>
+                    <span className="font-mono text-cyan-300">{calEst.toFixed(1)} °C</span>
+                  </div>
+                )}
+                <div className="mb-2 text-[8px] leading-relaxed text-neutral-600">
+                  ΔT max carte : r = {thermalCal.rMax.toFixed(2)} — structurellement décorrélat du noyau (il prédit
+                  l&apos;exposition des sensibles, pas le point chaud global) : outil de CLASSEMENT, pas de prévision absolue.
+                </div>
+                {/* Profil d&apos;impédance IPC-2141 par classe */}
+                <div className="mb-2 overflow-hidden rounded border border-neutral-800/60">
+                  <div className="grid grid-cols-[1fr_52px_52px_46px_46px] gap-x-1 border-b border-neutral-800 bg-black/50 px-2 py-1 text-[8px] font-semibold uppercase tracking-wide text-neutral-500">
+                    <span>Classe</span><span className="text-right">Largeur</span><span className="text-right">Z0</span><span className="text-right">Cible</span><span className="text-right">Δ</span>
+                  </div>
+                  {ziProfile.map((z) => (
+                    <div key={z.cls} className="grid grid-cols-[1fr_52px_52px_46px_46px] items-center gap-x-1 border-b border-neutral-900/60 bg-black/30 px-2 py-0.5 text-[9px] last:border-b-0">
+                      <span className="truncate text-neutral-300">{z.cls}</span>
+                      <span className="text-right font-mono text-neutral-400">{z.widthMm.toFixed(2)}</span>
+                      <span className="text-right font-mono text-neutral-200">{z.z0.toFixed(1)}Ω</span>
+                      <span className="text-right font-mono text-neutral-500">{z.target ?? '—'}</span>
+                      <span className={`text-right font-mono ${z.delta === null ? 'text-neutral-600' : Math.abs(z.delta) < 5 ? 'text-emerald-400' : Math.abs(z.delta) < 15 ? 'text-amber-400' : 'text-red-400'}`}>
+                        {z.delta === null ? '—' : `${z.delta > 0 ? '+' : ''}${z.delta.toFixed(1)}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="mb-2 flex h-16 items-center justify-center rounded-md bg-black/40 text-[10px] text-neutral-600">
+                Pas encore calibré pour ce projet — la droite latent→°C n&apos;existe pas encore.
+              </div>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={calBusy}
+              className="w-full gap-2 border-cyan-700 bg-cyan-950/30 text-[10px] text-cyan-300 hover:bg-cyan-900/40"
+              onClick={runCalibration}
+              data-testid="calibrate-btn"
+            >
+              <Repeat className={`h-3 w-3 ${calBusy ? 'animate-spin' : ''}`} />
+              {calBusy ? 'Calibration en cours (FDM ×17)…' : thermalCal ? 'Recalibrer le modèle latent' : 'Calibrer le modèle latent'}
+            </Button>
+          </section>
 
           {/* DRC */}
           <section className="rounded-lg border border-red-900/40 bg-black/30 p-3">
