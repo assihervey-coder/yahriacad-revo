@@ -98,6 +98,8 @@ interface StudioState {
     showHeatmap: boolean
     showComponents: boolean
     selectedRef: string | null
+    /** [M6] sélection multiple (Maj+clic) — déplacement groupé aux flèches */
+    multiRefs: string[]
   }
   history: RunHistoryItem[]
   editLog: EditLogItem[]
@@ -122,6 +124,9 @@ interface StudioState {
   setLayers: (n: 2 | 4 | 6) => void
   addCustomNetlist: (nl: Netlist) => void
   surgicalMove: (ref: string, dx: number, dy: number) => Promise<void>
+  /** [M6] déplacement GROUPÉ : tous les refs bougent du même delta, un seul
+   *  re-routage, et UNE entrée de journal PAR composant déplacé */
+  surgicalMoveGroup: (refs: string[], dx: number, dy: number) => Promise<void>
   log: (stage: LogEntry['stage'], level: LogEntry['level'], msg: string) => void
   run: () => Promise<void>
   cancel: () => void
@@ -529,7 +534,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   costHistory: [],
   plan: null,
   constraintsCount: 0,
-  viewer: { mode: '3d', showTraces: true, showHeatmap: false, showComponents: true, selectedRef: null },
+  viewer: { mode: '3d', showTraces: true, showHeatmap: false, showComponents: true, selectedRef: null, multiRefs: [] },
   history: [],
   editLog: [],
   liveRouting: idleLive(),
@@ -613,6 +618,46 @@ export const useStudio = create<StudioState>((set, get) => ({
     const moved = placementDiff(before, clamped)
     if (moved) logEdit('move', moved.ref, moved.from, moved.to)
     await rerouteAfterPlacementEdit('[CHIRURGIE]')
+    set({ surgicalBusy: false })
+  },
+
+  /* ---------------- [M6] Déplacement GROUPÉ (sélection multiple) ----------
+   * Cinq composants sélectionnés (Maj+clic) avancent d'UN BLOC aux flèches :
+   * un seul re-routage incrémental, et le journal d'édition reçoit UNE
+   * entrée PAR composant (delta exact par ref) — traçabilité à l'unité. */
+  surgicalMoveGroup: async (refs, dx, dy) => {
+    const s = get()
+    if (s.running || s.surgicalBusy || !s.livePlacements || !s.result.thermal || refs.length < 2) return
+    const before = s.livePlacements
+    const refSet = new Set(refs)
+    pushPlacementHistory()
+    set({ surgicalBusy: true, livePlacements: s.livePlacements.map((p) => (refSet.has(p.ref) ? { ...p, x: p.x + dx, y: p.y + dy } : p)) })
+    get().log('system', 'agent', `[CHIRURGIE GROUPE] ${refs.length} composants déplacés d'un bloc (${dx > 0 ? '+' : ''}${dx}, ${dy > 0 ? '+' : ''}${dy}) mm — re-routage incrémental…`)
+    await new Promise((r) => setTimeout(r, 40))
+    const nl = get().netlist
+    const clamped = get().livePlacements!.map((p) => {
+      if (!refSet.has(p.ref)) return p
+      const c = nl.components.find((x) => x.ref === p.ref)
+      if (!c) return p
+      const swap = p.rot === 90 || p.rot === 270
+      const w = swap ? c.footprint.h : c.footprint.w
+      const h = swap ? c.footprint.w : c.footprint.h
+      return {
+        ...p,
+        x: Math.min(nl.board.w - w / 2 - 0.4, Math.max(w / 2 + 0.4, p.x)),
+        y: Math.min(nl.board.h - h / 2 - 0.4, Math.max(h / 2 + 0.4, p.y)),
+      }
+    })
+    set({ livePlacements: clamped })
+    // [M6] journal distinct PAR composant : chaque geste porte son delta exact
+    for (const p of clamped) {
+      if (!refSet.has(p.ref)) continue
+      const b = before.find((q) => q.ref === p.ref)!
+      if (Math.abs(b.x - p.x) > 1e-6 || Math.abs(b.y - p.y) > 1e-6) {
+        logEdit('move', p.ref, b, p, `déplacement groupé (${refs.length} composants)`)
+      }
+    }
+    await rerouteAfterPlacementEdit('[CHIRURGIE GROUPE]')
     set({ surgicalBusy: false })
   },
 

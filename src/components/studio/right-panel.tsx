@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Bot, CheckCircle2, Download, FileDown, Gauge, GitCompare, LayoutGrid, Minus, Package, Plus, Repeat, Ruler, ShieldCheck,
+  Bot, Box, CheckCircle2, Download, FileDown, Gauge, GitCompare, LayoutGrid, Minus, Package, Plus, Repeat, Ruler, ShieldCheck,
   Thermometer, TriangleAlert, X, Zap,
 } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
@@ -846,6 +846,22 @@ export function RightPanel() {
                     data-testid="export-panel"
                   >
                     <LayoutGrid className="h-3.5 w-3.5" /> Télécharger le panel ({(netlist.board.layers >= 4 ? 4 : 2) + 3} fichiers)
+                  </Button>
+                  {/* ---------- Export OBJ 3D — intégration mécanique [Sprint 3 M6] ---------- */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!result.routing}
+                    className="w-full gap-2 border-teal-700 bg-teal-950/30 text-[10px] text-teal-300 hover:bg-teal-900/40"
+                    data-testid="export-obj"
+                    onClick={async () => {
+                      const { buildObjExport } = await import('@/lib/engine/obj')
+                      const file = buildObjExport(netlist, result.placement!.placements)
+                      download(file.name, file.content)
+                      useStudio.getState().log('system', 'agent', `[OBJ 3D] Positions exportées — ${file.name} : dalle FR4 + ${netlist.components.length} volumes composants (1 unité = 1 mm, import mécanique direct)`)
+                    }}
+                  >
+                    <Box className="h-3.5 w-3.5" /> OBJ 3D (positions mécaniques)
                   </Button>
                   {/* ---------- Deck SPICE — corrélation circuit [audit P2.4] ---------- */}
                   <Button

@@ -30,6 +30,7 @@ import { buildEvalContext, mulberry32 } from '../src/lib/engine/world-model'
 import type { PlacedComponent } from '../src/lib/engine/types'
 import { AMBIENT } from '../src/lib/engine/simulator'
 import { generateSpiceDeck } from '../src/lib/engine/spice'
+import { buildObjExport } from '../src/lib/engine/obj'
 import { DEFAULT_RULES } from '../src/lib/engine/rules'
 import { datasetSha256, measuredRevision } from './lib/measured-versioning'
 
@@ -251,6 +252,20 @@ for (const nl of NETLISTS) {
   assert(mcal.r > 0.5 && Math.abs(mcal.r - cal.r) < 0.1, `mesuré : corrélation r = ${mcal.r.toFixed(3)} ≈ r FDM ${cal.r.toFixed(3)} sur les mêmes placements (bruit ±0,2 °C)`)
   assert(mcal.slope > 0 && Math.abs(mcal.slope - cal.slope) / cal.slope < 0.15, `mesuré : pente ${mcal.slope.toFixed(3)} ≈ pente FDM ${cal.slope.toFixed(3)} °C/u (mêmes placements, ±15 %)`)
   assert(mcal.matchedRefs.length > 0 && mcal.sources.length === 1, `mesuré : ${mcal.matchedRefs.length} refs sensibles couvertes, provenance tracée`)
+
+  // ---- Sprint 3 M6 — export OBJ mécanique ----
+  {
+    const obj = buildObjExport(nl, placement.placements)
+    const lines = obj.content.split('\n')
+    const objs = lines.filter((l) => l.startsWith('o '))
+    const verts = lines.filter((l) => l.startsWith('v ')).map((l) => l.split(/\s+/).slice(1).map(Number))
+    assert(objs.length === nl.components.length + 1, `M6 OBJ : ${objs.length} objets (dalle FR4 + ${nl.components.length} composants)`)
+    assert(objs[0] === 'o board_FR4' && verts.length >= (nl.components.length + 1) * 8, `M6 OBJ : dalle + ${verts.length} sommets (8 par volume)`)
+    const xs = verts.map((v) => v[0]), ys = verts.map((v) => v[1]), zs = verts.map((v) => v[2])
+    assert(Math.min(...xs) >= -0.01 && Math.max(...xs) <= nl.board.w + 0.01 && Math.min(...zs) >= -0.01 && Math.max(...zs) <= nl.board.h + 0.01, 'M6 OBJ : tous les volumes dans l’emprise carte (rotations comprises)')
+    assert(Math.min(...ys) >= 0 && Math.max(...ys) > 1.6, `M6 OBJ : empilement vertical FR4 1,6 mm + composants (h max ${Math.max(...ys).toFixed(1)} mm)`)
+    assert(lines.some((l) => l.startsWith('f ')) && obj.content.includes('# unité : 1 = 1 mm'), 'M6 OBJ : faces quads + convention d’axes documentée (import mécanique direct)')
+  }
 
   // ---- Sprint 1 M1 — seuils publiés, IC de pente, versionnage ----
   assert(

@@ -256,7 +256,7 @@ export default function BoardViewer2D() {
         const w = (swap ? c.footprint.h : c.footprint.w) * s
         const h = (swap ? c.footprint.w : c.footprint.h) * s
         const cx = X(p.x), cy = Y(p.y)
-        const selected = viewer.selectedRef === p.ref
+        const selected = viewer.selectedRef === p.ref || viewer.multiRefs.includes(p.ref)
         ctx.fillStyle = selected ? 'rgba(16,185,129,0.9)' : (CATEGORY_COLOR[c.category] ?? '#333333')
         ctx.fillRect(cx - w / 2, cy - h / 2, w, h)
         ctx.strokeStyle = selected ? '#6ee7b7' : 'rgba(110,231,183,0.25)'
@@ -311,7 +311,11 @@ export default function BoardViewer2D() {
       setDragging(true)
       try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* sans gravité */ }
       s.beginDrag(hit)
-      setViewer({ selectedRef: hit })
+      // [M6] Maj+clic = sélection multiple (toggle) ; clic simple = raz
+      const multi = e.shiftKey
+        ? (s.viewer.multiRefs.includes(hit) ? s.viewer.multiRefs.filter((r) => r !== hit) : [...new Set([...s.viewer.multiRefs, hit])])
+        : []
+      setViewer({ selectedRef: hit, multiRefs: multi })
     }
   }
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -332,7 +336,13 @@ export default function BoardViewer2D() {
     if (!down) return
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return
     const { mmX, mmY } = toMm(e)
-    setViewer({ selectedRef: hitTest(mmX, mmY) })
+    const hit = hitTest(mmX, mmY)
+    // [M6] Maj+clic sans drag = toggle de la sélection multiple
+    const s = useStudio.getState()
+    const multi = e.shiftKey && hit
+      ? (s.viewer.multiRefs.includes(hit) ? s.viewer.multiRefs.filter((r) => r !== hit) : [...new Set([...s.viewer.multiRefs, hit])])
+      : []
+    setViewer({ selectedRef: hit, multiRefs: multi })
   }
 
   return (

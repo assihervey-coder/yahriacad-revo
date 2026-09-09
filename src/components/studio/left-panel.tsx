@@ -27,6 +27,7 @@ const KIND_COLOR: Record<string, string> = {
 export function LeftPanel() {
   const netlist = useStudio((s) => s.netlist)
   const selectedRef = useStudio((s) => s.viewer.selectedRef)
+  const multiRefs = useStudio((s) => s.viewer.multiRefs)
   const setViewer = useStudio((s) => s.setViewer)
   const placements = useStudio((s) => s.livePlacements)
   const constraints = extractConstraints(netlist)
@@ -69,11 +70,19 @@ export function LeftPanel() {
           <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
             {netlist.components.map((c) => {
               const pos = placements?.find((p) => p.ref === c.ref)
-              const selected = selectedRef === c.ref
+              const selected = selectedRef === c.ref || multiRefs.includes(c.ref)
               return (
                 <button
                   key={c.ref}
-                  onClick={() => setViewer({ selectedRef: selected ? null : c.ref })}
+                  onClick={(e) => {
+                    // [M6] Maj+clic = toggle de la sélection multiple (bloc déplaçable aux flèches)
+                    // — l'état est relu à chaque clic (jamais la closure)
+                    const cur = useStudio.getState().viewer.multiRefs
+                    const multi = e.shiftKey
+                      ? (cur.includes(c.ref) ? cur.filter((r) => r !== c.ref) : [...new Set([...cur, c.ref])])
+                      : []
+                    setViewer({ selectedRef: e.shiftKey ? c.ref : (selected ? null : c.ref), multiRefs: multi })
+                  }}
                   className={`w-full rounded-md border px-2 py-1.5 text-left transition-colors ${
                     selected
                       ? 'border-emerald-500/70 bg-emerald-900/30'

@@ -154,7 +154,7 @@ export default function BoardViewer() {
         }
       }
       if (e.key === 'Escape') {
-        if (s.viewer.selectedRef) s.setViewer({ selectedRef: null })
+        if (s.viewer.selectedRef || s.viewer.multiRefs.length > 0) s.setViewer({ selectedRef: null, multiRefs: [] })
         return
       }
       const ref = s.viewer.selectedRef
@@ -168,6 +168,12 @@ export default function BoardViewer() {
       else if (e.key === 'ArrowRight') dx = step
       else return
       e.preventDefault() // un nudge n'est jamais un scroll de page
+      // [M6] sélection multiple ≥ 2 composants → déplacement GROUPÉ (un bloc,
+      // un re-routage, une entrée de journal par composant)
+      if (!s.liveRouting.active && s.viewer.multiRefs.length >= 2) {
+        void s.surgicalMoveGroup(s.viewer.multiRefs, dx, dy)
+        return
+      }
       if (s.liveRouting.active) void s.liveNudge(ref, dx, dy)
       else void s.surgicalMove(ref, dx, dy)
     }
@@ -701,6 +707,12 @@ export default function BoardViewer() {
         <div className="absolute right-3 top-3 rounded-md border border-emerald-700/50 bg-black/75 px-3 py-2 text-xs backdrop-blur">
           <div className="font-semibold text-emerald-300">{viewer.selectedRef}</div>
           <div className="text-neutral-300">{netlist.components.find((c) => c.ref === viewer.selectedRef)?.value}</div>
+          {/* [M6] sélection multiple : Maj+clic empile, flèches déplacent le bloc */}
+          {viewer.multiRefs.length > 0 && (
+            <div data-testid="multi-select-badge" className="mt-1 rounded border border-cyan-700/60 bg-cyan-950/40 px-1.5 py-0.5 text-[10px] text-cyan-300">
+              {viewer.multiRefs.length} sélectionné(s) — Maj+clic pour ajuster · flèches = bloc
+            </div>
+          )}
           {/* Éditeur chirurgical [Flux.ai] : déplacement fin + re-routage incrémental.
               Pendant un flux live [DeepPCB] : nudge → le routeur REPART EN DIRECT. */}
           <div
