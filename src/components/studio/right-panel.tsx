@@ -2,11 +2,12 @@
 /**
  * NEXUS PCB — Panneau droit : détails pipeline, agents IA, analyses, export fabrication
  * + cartes v2 : optimiseur ratchet [AutoPCB], audit [Siemens Fuse], diaphonie [AuraStack]
+ * + comparaison de runs historiques [audit P1.3]
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  Bot, CheckCircle2, Download, FileDown, Gauge, Repeat, ShieldCheck,
-  Thermometer, TriangleAlert, Zap,
+  Bot, CheckCircle2, Download, FileDown, Gauge, GitCompare, Repeat, ShieldCheck,
+  Thermometer, TriangleAlert, X, Zap,
 } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -25,6 +26,33 @@ function download(name: string, content: string) {
   a.download = name
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** Métrique comparée renvoyée par /api/runs/compare [audit P1.3] */
+type RunComparisonMetric = {
+  key: string
+  label: string
+  unit: string
+  decimals?: number
+  a: number
+  b: number
+  delta: number
+  pct: number | null
+  verdict: 'better' | 'worse' | 'equal'
+}
+
+/** Réponse de l'API de comparaison de runs [audit P1.3] */
+type RunComparison = {
+  a: { createdAt: string; status: string; planSource: string }
+  b: { createdAt: string; status: string; planSource: string }
+  sameProject: boolean
+  summary: { improved: number; regressed: number; unchanged: number }
+  metrics: RunComparisonMetric[]
+}
+
+/** Formatage fr-FR compact pour les valeurs de comparaison */
+function fmtNum(v: number, decimals?: number) {
+  return v.toLocaleString('fr-FR', { minimumFractionDigits: decimals ?? 0, maximumFractionDigits: decimals ?? 2 })
 }
 
 export function RightPanel() {
@@ -46,6 +74,34 @@ export function RightPanel() {
   const routing = result.routing
 
   const gerberDir = useMemo(() => `${netlist.id.replace(/-/g, '_')}_fab`, [netlist.id])
+
+  // --- Comparaison de runs historiques [audit P1.3] ---
+  const [compareMode, setCompareMode] = useState(false)
+  const [selA, setSelA] = useState<string | null>(null)
+  const [selB, setSelB] = useState<string | null>(null)
+  const [comparison, setComparison] = useState<RunComparison | null>(null)
+
+  // Changement de projet : réinitialise la sélection
+  useEffect(() => {
+    setSelA(null)
+    setSelB(null)
+    setComparison(null)
+  }, [netlist.id])
+
+  // Les deux runs sont choisis : récupère le delta métrique par métrique
+  useEffect(() => {
+    if (!selA || !selB || selA === selB) return
+    let alive = true
+    fetch(`/api/runs/compare?a=${selA}&b=${selB}`)
+      .then((r) => r.json())
+      .then((d: unknown) => {
+        if (!alive) return
+        const data = d as RunComparison
+        setComparison(data && Array.isArray(data.metrics) ? data : null)
+      })
+      .catch(() => { if (alive) setComparison(null) })
+    return () => { alive = false }
+  }, [selA, selB])
 
   return (
     <Tabs defaultValue="pipeline" className="flex h-full flex-col gap-0">
@@ -436,31 +492,149 @@ export function RightPanel() {
 
         {/* ============================ HISTORIQUE ============================ */}
         <TabsContent value="historique" className="mt-0 space-y-2 p-3">
-          {history.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-[11px] text-neutral-600">
-              Aucune exécution enregistrée pour ce projet
-            </div>
-          ) : (
-            history.map((h) => (
-              <div key={h.id} className="rounded-lg border border-neutral-800/60 bg-black/30 p-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-neutral-400">
-                    {new Date(h.createdAt).toLocaleString('fr-FR')}
-                  </span>
-                  <Badge variant="outline" className={`h-4.5 border px-1.5 text-[9px] ${
-                    h.status === 'success' ? 'border-emerald-700 text-emerald-400' : 'border-amber-700 text-amber-400'
-                  }`}>
-                    {h.status}
-                  </Badge>
-                </div>
-                <div className="mt-1 grid grid-cols-4 gap-1 text-center text-[9px]">
-                  <div><span className="font-mono text-emerald-300">{h.dfmScore}</span><span className="text-neutral-600"> DFM</span></div>
-                  <div><span className="font-mono text-teal-300">{h.routedNets}/{h.totalNets}</span><span className="text-neutral-600"> nets</span></div>
-                  <div><span className="font-mono text-orange-300">{h.maxTempC.toFixed(0)}°C</span><span className="text-neutral-600"> max</span></div>
-                  <div><span className="font-mono text-fuchsia-300">{h.planSource}</span><span className="text-neutral-600"> plan</span></div>
+          {comparison ? (
+            /* ---------- Vue comparaison A/B [audit P1.3] ---------- */
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Button
+                  size="sm" variant="outline"
+                  className="h-6 gap-1 border-neutral-700 px-2 text-[10px] text-neutral-300 hover:bg-neutral-800"
+                  onClick={() => { setComparison(null); setSelA(null); setSelB(null) }}
+                >
+                  <X className="h-3 w-3" /> Fermer la comparaison
+                </Button>
+                <span className="text-[9px] text-neutral-500">
+                  <span className="text-emerald-400">{comparison.summary.improved} ↗</span> · {' '}
+                  <span className="text-red-400">{comparison.summary.regressed} ↘</span> · {' '}
+                  {comparison.summary.unchanged} =
+                </span>
+              </div>
+              <div className="rounded-lg border border-neutral-800/60 bg-black/30 p-2.5">
+                <div className="grid grid-cols-2 gap-2 text-[9px]">
+                  <div>
+                    <div className="mb-0.5 flex items-center gap-1"><span className="rounded bg-emerald-900/60 px-1 font-mono text-[9px] text-emerald-300">A</span><span className="text-neutral-500">base</span></div>
+                    <div className="text-neutral-400">{new Date(comparison.a.createdAt).toLocaleString('fr-FR')}</div>
+                    <div className="text-neutral-600">{comparison.a.status} · plan {comparison.a.planSource}</div>
+                  </div>
+                  <div>
+                    <div className="mb-0.5 flex items-center gap-1"><span className="rounded bg-teal-900/60 px-1 font-mono text-[9px] text-teal-300">B</span><span className="text-neutral-500">candidat</span></div>
+                    <div className="text-neutral-400">{new Date(comparison.b.createdAt).toLocaleString('fr-FR')}</div>
+                    <div className="text-neutral-600">{comparison.b.status} · plan {comparison.b.planSource}</div>
+                  </div>
                 </div>
               </div>
-            ))
+              <div className="overflow-hidden rounded-lg border border-neutral-800/60">
+                <div className="grid grid-cols-[1fr_52px_52px_86px] gap-x-1 border-b border-neutral-800 bg-black/50 px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wide text-neutral-500">
+                  <span>Métrique</span><span className="text-right">A</span><span className="text-right">B</span><span className="text-right">Δ B−A</span>
+                </div>
+                {comparison.metrics.map((m) => (
+                  <div key={m.key} className="grid grid-cols-[1fr_52px_52px_86px] items-center gap-x-1 border-b border-neutral-900/60 bg-black/30 px-2 py-1 text-[9px] last:border-b-0">
+                    <span className="truncate text-neutral-300" title={m.label}>{m.label}</span>
+                    <span className="text-right font-mono text-neutral-400">{fmtNum(m.a, m.decimals)}{m.unit}</span>
+                    <span className="text-right font-mono text-neutral-200">{fmtNum(m.b, m.decimals)}{m.unit}</span>
+                    <span className={`whitespace-nowrap text-right font-mono ${
+                      m.verdict === 'better' ? 'text-emerald-400'
+                      : m.verdict === 'worse' ? 'text-red-400'
+                      : 'text-neutral-500'
+                    }`}>
+                      {m.delta > 0 ? '+' : ''}{fmtNum(m.delta, m.decimals ?? 0)}{m.pct !== null && m.pct !== 0 ? ` (${m.pct > 0 ? '+' : ''}${m.pct.toFixed(0)}%)` : ''}
+                      {' '}{m.verdict === 'better' ? '↗' : m.verdict === 'worse' ? '↘' : '='}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {!comparison.sameProject && (
+                <p className="text-[9px] text-amber-500/80">
+                  ⚠ Les deux runs proviennent de projets différents — lecture indicative.
+                </p>
+              )}
+            </div>
+          ) : (
+            /* ---------- Liste des runs (+ mode comparaison) ---------- */
+            <>
+              <div className="flex items-center justify-between px-0.5">
+                <span className="text-[9px] text-neutral-600">
+                  {history.length} exécution{history.length > 1 ? 's' : ''} enregistrée{history.length > 1 ? 's' : ''}
+                </span>
+                <Button
+                  size="sm" variant="outline"
+                  className={`h-6 gap-1 px-2 text-[10px] ${
+                    compareMode ? 'border-emerald-600 bg-emerald-900/40 text-emerald-300' : 'border-neutral-700 text-neutral-400 hover:bg-neutral-800'
+                  }`}
+                  onClick={() => { setCompareMode((v) => !v); setSelA(null); setSelB(null) }}
+                >
+                  <GitCompare className="h-3 w-3" /> Comparer
+                </Button>
+              </div>
+              {compareMode && (
+                <div className="rounded-lg border border-emerald-900/50 bg-emerald-950/20 px-2.5 py-1.5 text-[9px] text-emerald-200/80">
+                  Choisissez la base <span className="rounded bg-emerald-900/60 px-1 font-mono text-emerald-300">A</span> et le candidat <span className="rounded bg-teal-900/60 px-1 font-mono text-teal-300">B</span> sur deux exécutions, ou utilisez « Δ vs précédent ».
+                </div>
+              )}
+              {compareMode && (selA || selB) && (
+                <div className="px-0.5 text-[9px] text-neutral-500">
+                  Sélection : {selA ? <span className="text-emerald-400">A ✓</span> : 'A —'} · {selB ? <span className="text-teal-400">B ✓</span> : 'B —'}
+                  {selA && selB && <span className="ml-1 animate-pulse text-neutral-400">calcul…</span>}
+                </div>
+              )}
+              {history.length === 0 ? (
+                <div className="flex h-32 items-center justify-center text-[11px] text-neutral-600">
+                  Aucune exécution enregistrée pour ce projet
+                </div>
+              ) : (
+                history.map((h, i) => (
+                  <div key={h.id} className={`rounded-lg border p-2.5 ${
+                    selA === h.id ? 'border-emerald-600/70 bg-emerald-950/20'
+                    : selB === h.id ? 'border-teal-600/70 bg-teal-950/20'
+                    : 'border-neutral-800/60 bg-black/30'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-neutral-400">
+                        {new Date(h.createdAt).toLocaleString('fr-FR')}
+                      </span>
+                      <Badge variant="outline" className={`h-4.5 border px-1.5 text-[9px] ${
+                        h.status === 'success' ? 'border-emerald-700 text-emerald-400' : 'border-amber-700 text-amber-400'
+                      }`}>
+                        {h.status}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 grid grid-cols-4 gap-1 text-center text-[9px]">
+                      <div><span className="font-mono text-emerald-300">{h.dfmScore}</span><span className="text-neutral-600"> DFM</span></div>
+                      <div><span className="font-mono text-teal-300">{h.routedNets}/{h.totalNets}</span><span className="text-neutral-600"> nets</span></div>
+                      <div><span className="font-mono text-orange-300">{h.maxTempC.toFixed(0)}°C</span><span className="text-neutral-600"> max</span></div>
+                      <div><span className="font-mono text-fuchsia-300">{h.planSource}</span><span className="text-neutral-600"> plan</span></div>
+                    </div>
+                    {compareMode && (
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <button
+                          data-testid={`cmp-a-${h.id}`}
+                          onClick={() => setSelA(selA === h.id ? null : h.id)}
+                          className={`h-5 rounded px-2 font-mono text-[9px] transition-colors ${
+                            selA === h.id ? 'bg-emerald-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'
+                          }`}
+                        >A</button>
+                        <button
+                          data-testid={`cmp-b-${h.id}`}
+                          onClick={() => setSelB(selB === h.id ? null : h.id)}
+                          className={`h-5 rounded px-2 font-mono text-[9px] transition-colors ${
+                            selB === h.id ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'
+                          }`}
+                        >B</button>
+                        {i < history.length - 1 && (
+                          <button
+                            data-testid={`cmp-prev-${h.id}`}
+                            onClick={() => { setSelA(h.id); setSelB(history[i + 1].id) }}
+                            className="ml-auto h-5 rounded bg-neutral-800 px-2 text-[9px] text-neutral-400 transition-colors hover:bg-neutral-700"
+                          >
+                            Δ vs précédent
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </>
           )}
         </TabsContent>
       </ScrollArea>
