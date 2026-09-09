@@ -313,3 +313,82 @@ Work Log:
 Stage Summary:
 - download/Landing_NEXUS_PCB_decideurs.pdf : 6 pages A4, 3,7 Mo (bruit SVG), vecteur, sans chevauchement. Source : download/Landing_decideurs_source.html.
 - Les 3 PDF + 3 sources HTML committés et poussés (main).
+
+---
+Task ID: 14
+Agent: Super Z (agent principal)
+Task: P1.3 — Comparaison de runs historiques via Prisma (API delta + UI Historique), puis P1.4 — import JSON de session replay ; commit + push.
+
+Work Log:
+- P1.3 : API GET /api/runs/compare?a&b — 12 métriques comparables avec sens « meilleur » (lowerIsBetter), delta absolu + variation %, verdict better/worse/equal, résumé améliorations/régressions, garde mêmes-projets.
+- UI Historique : bouton Comparer, sélection A/B par carte, action « Δ vs précédent », tableau Métrique/A/B/Δ B−A coloré (emerald/rouge/neutre), colonne Δ élargie + décimales assainies (entiers sans .00), reset au changement de projet.
+- P1.4 : importReplaySession(file) — validation nexus-replay v1, assainissement numérique des événements (segments/vias NaN ou champs manquants écartés → évite THREE radius NaN), base compactée restaurée, session importée = session « dernière » (replay/seek/re-export) ; bouton ⬆ dans barre dépliée + pilule ; pilule « importer une session » à l'état froid (reload).
+- Fixture scripts/make_replay_fixture.cjs (via Via schema corrigé net/x/y/drill/diameter).
+- Vérifications : tsc 0 ; suite moteur TOUS LES TESTS PASSENT ; E2E navigateur (comparaison 13 lignes bilan 1↗·8↘·3=, import à froid 66 évts, relecture + seek 20→3 routes, fichier corrompu refusé, zéro erreur console).
+- Commits : 4a9fbe0 (P1.3), 3fcc797 (P1.4) — poussés (hook pre-push 85 assertions + SSE).
+
+Stage Summary:
+- Priorité 1 intégralement soldée : boucle d'amélioration lisible (comparaison A/B) et sessions replay portables (export ↔ import symétriques).
+
+---
+Task ID: 15
+Agent: Super Z (agent principal)
+Task: P2.1 — Export Gerber X2 + package ODB++ (.tgz) ; commit + push.
+
+Work Log:
+- gerber.ts : attributs X2 sur tous les .gbr (TF.GenerationSoftware/CreationDate/ProjectId/Part, TF.FileFunction Copper L1..Ln Top/Inr/Bot + Profile,NP, TO.N par net sur pistes regroupées par net, TO.C par composant, TO.V sur vias, %TD) — rétrocompatible X1.
+- odb.ts : package ODB++ ASCII sous-set — matrix (SIGNAL/DRILL + sides), stephdr, outline, layers/<c>/lines+pads (µm, symboles r/rect), layers/drill/drill (outils C= par diamètre), netlist (NET{NETNAME,PINS,PATH,VIA}, nets non routés en PINS) ; tar ustar écrit main (512 o, checksum) + gzip CompressionStream (repli tar brut).
+- UI export : bouton ODB++ (.tgz) avec import dynamique + log récap ; description actualisée.
+- Tests : 14 assertions X2+ODB++ (magie ustar offset 257, matrix, netlist, drill, L µm).
+- Vérifié : E2E pipeline 27/28 → export ODB++ 9 fichiers (486 pistes/135 pads/176 vias/88 perçages), X2 présent, 0 erreur console. Commit ba8dcd9.
+
+Stage Summary:
+- La chaîne d'export couvre désormais les trois canaux industriels : Gerber X2 (référence), ODB++ (CAM/Valor), Excellon+BOM/POS.
+
+---
+Task ID: 16
+Agent: Super Z (agent principal)
+Task: P2.2 — Panelisation production + contraintes fabricant ; commit + push.
+
+Work Log:
+- panelizer.ts : 3 préréglages (JLCPCB/PCBWay/générique) ; checkManufacturability mesure le design réel (piste min, drill min, anneau, isolement règle, distance bord des extrémités de pistes, dimensions, couches) → 7 contrôles mesuré-vs-exigé + verdict ; buildPanel (grille 1-4×1-4, rails, 4 repères ⌀1/ouverture ⌀3, 4 trous ⌀3,2, V-cut en tirets ou onglets ⌀0,6, utilisation matière) ; generatePanelPackage — cuivres RÉELLEMENT transformés (offsetGerber translation µ par copie, TF une seule fois, M02 unique), perçage étendu, contour panel complet, notice d'assemblage.
+- UI export : carte PANELISATION PRODUCTION (fabricant, séparation, grille ±, 7 contrôles ✓/✗, gabarit + %, téléchargement panel_*, log).
+- Tests : 16 assertions (préréglage absurde rejeté, géométrie, V-cut/bites, translation exacte, copies assainies, cuivre ×4).
+- Vérifié : E2E pipeline → carte CONFORME 7 contrôles verts, panel 2×2 122×102 mm 87 % téléchargé, 0 erreur console. Commit d5fa36f.
+
+Stage Summary:
+- Le studio passe de carte unitaire à flux production : conformité usine mesurée et panel fabriquable téléchargeable.
+
+---
+Task ID: 17
+Agent: Super Z (agent principal)
+Task: P2.3 — Calibration par corrélation modèle latent ↔ simulation ; commit + push.
+
+Work Log:
+- calibration.ts : harnais calibrateThermalModel — N placements aléatoires légaux (mulberry32) + ANCRE = solution opérante ; vérité terrain = ΔT FDM moyen aux composants SENSIBLES (cible exacte du noyau, corrige le choix initial maxT qui donnait r≈0,2) ; Pearson + moindres carrés latent→°C + RMSE/err max ; rMax (ΔT max carte) mesuré séparément et affiché comme structurellement décorrélé (outil de classement) ; calibratedDeltaT (prédiction calibrée) ; truthSensitiveDeltaT ; impedanceProfile (Z0 IPC-2141 par classe vs cibles).
+- simulator.ts : AMBIENT exporté.
+- UI analyse : carte CORRÉLATION MODÈLE ↔ SIMULATION (r/pente/RMSE/N, prédiction calibrée du placement courant, note de portée, profil Z0 coloré — révèle rf +1,8 Ω OK vs diffpair +43,8 Ω), recalibrer avec busy, persistance localStorage par projet, log récap.
+- Tests : 6 assertions/projet (r mesuré 0,70/0,77/0,84 > 0,55).
+- Vérifié : E2E calibration live r=0,626 pente 1,655 °C/u RMSE 6,8 °C (17 éch.+ancre), 0 erreur console. Commit e2b7508.
+
+Stage Summary:
+- La promesse « modèle du monde » devient mesurable : la corrélation latent↔FDM est quantifiée, calibrée et honnête sur ses limites.
+
+---
+Task ID: 18
+Agent: Super Z (agent principal)
+Task: P2.4 — Journal d'édition immuable + corrélation SPICE + bascule Postgres multi-utilisateurs ; commit + push.
+
+Work Log:
+- Prisma : modèle EditEvent (actor/kind/ref/from-to x/y/rot/meta/ts) + Project.edits — db push appliqué.
+- API /api/edits GET/POST ; store logEdit + placementDiff — chaque geste journalisé avec delta exact : surgicalMove (move), liveNudge (nudge-live), drag (depuis la position de saisie), undo/redo (miroir exact) ; loadEditLog au changement de projet et après chaque geste.
+- UI historique : liste « Journal d'édition (immuable) » colorée par kind.
+- spice.ts : deck SPICE .cir — .SUBCKT/X par composant (nœuds = nets) + parasitique RÉEL par segment (R série cuivre 35 µm, C shunt FR4 1,6 mm, bilan ΣR/ΣC) ; bouton export UI.
+- Postgres : scripts/use-db.sh (bascule provider sqlite↔postgresql + generate) + npm db:pg/db:sqlite.
+- Incident résolu : serveur dev zombie (EADDRINUSE) servant l'ancien client Prisma — pkill next dev puis redémarrage propre.
+- Tests : 6 assertions SPICE/projet (plausibilité physique R 0,98-1,97 mΩ/segment).
+- Vérifié : E2E drag U1 (+0,5,+1,0) journalisé + undo (−0,5,−1,0) miroir exact, journal rendu, deck SPICE 70 segments ΣR 828,8 mΩ, 0 erreur console. Commit cb71641.
+- PUSH FINAL : 3fcc797..cb71641 — hook pre-push 214 assertions moteur + smoke SSE au vert.
+
+Stage Summary:
+- FEUILLE DE ROUTE D'AUDIT INTÉGRALEMENT SOLLÉE (12/12) : P0.1-P0.4, P1.1-P1.4, P2.1-P2.4 — chaque item committé, testé (214 assertions moteur), vérifié E2E et poussé ; les 3 PDF (audit V4 + 2 landings) livrés en amont (e8bb06c).
