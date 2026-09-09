@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# Hook pre-push NEXUS PCB [audit P0.3] — la régression devient un échec bloquant
+# 1. Suite moteur hors-ligne (pipeline complet + invariants sur 3 netlists)
+# 2. Smoke SSE du flux live (démarre le serveur dev si absent, le tue après)
+# Installation : git config core.hooksPath scripts/hooks  (ou bun run setup:hooks)
+# ─────────────────────────────────────────────────────────────────────────────
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+fail() { echo "[pre-push] ✗ $1 — PUSH BLOQUÉ" >&2; exit 1; }
+
+echo "[pre-push] 1/2 — suite moteur hors-ligne…"
+bun run scripts/test-engine.ts >/tmp/nexus-prepush-engine.log 2>&1 ||
+  { tail -20 /tmp/nexus-prepush-engine.log >&2; fail "suite moteur en échec (/tmp/nexus-prepush-engine.log)"; }
+grep -q "TOUS LES TESTS PASSENT" /tmp/nexus-prepush-engine.log ||
+  fail "la suite moteur n'a pas atteint « TOUS LES TESTS PASSENT »"
+echo "[pre-push]    moteur ✓ ($(grep -c '✓' /tmp/nexus-prepush-engine.log) assertions)"
+
+srv_pid=""
+cleanup() { [ -n "$srv_pid" ] && kill "$srv_pid" 2>/dev/null; wait "$srv_pid" 2>/dev/null; }
+trap cleanup EXIT
+
+if ! curl -sf -o /dev/null --max-time 3 http://localhost:3000; then
+  echo "[pre-push]    serveur absent — démarrage temporaire…"
+  nohup bun run dev >/tmp/nexus-prepush-dev.log 2>&1 &
+  srv_pid=$!
+  up=0
+  for _ in $(seq 1 90); do
+    if curl -sf -o /dev/null --max-time 2 http://localhost:3000; then up=1; break; fi
+    sleep 1
+  done
+  [ "$up" = "1" ] || fail "serveur dev introuvable après 90 s (/tmp/nexus-prepush-dev.log)"
+fi
+
+echo "[pre-push] 2/2 — smoke SSE du flux live…"
+bun run scripts/test-live-sse.ts >/tmp/nexus-prepush-sse.log 2>&1 ||
+  { tail -20 /tmp/nexus-prepush-sse.log >&2; fail "smoke SSE en échec (/tmp/nexus-prepush-sse.log)"; }
+grep -qE "complete" /tmp/nexus-prepush-sse.log ||
+  fail "le flux SSE n'a pas atteint complete"
+
+echo "[pre-push] ✓ moteur + SSE — push autorisé"
+exit 0

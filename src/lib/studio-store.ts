@@ -142,6 +142,13 @@ interface StudioState {
   undoSurgical: () => Promise<void>
   /** Rétablit le dernier déplacement annulé (Ctrl+Maj+Z / Ctrl+Y) */
   redoSurgical: () => Promise<void>
+  /** Exporte la session de routage enregistrée (JSON base + événements) —
+   *  partageable et re-jouable ; compagnon du ring buffer par tranches. */
+  exportReplaySession: () => void
+  /* HOOK DE TEST E2E uniquement : injecte n événements synthétiques dans
+   * l'enregistrement replay (éprouve ring buffer, compaction et seeks sans
+   * router des milliers de nets). Ne touche ni le HUD ni la carte hors session. */
+  testInjectRecording: (n: number) => void
   /* Drag & drop direct [souris] — saisie, déplacement continu, engagement */
   beginDrag: (ref: string) => void
   dragMoveTo: (ref: string, x: number, y: number) => void
@@ -195,9 +202,64 @@ let dragWasLive = false
 
 /** Enregistrement de la dernière session de routage (traces, progression,
  *  phases) pour le mode « replay » — rempli à la volée dans liveEnqueue,
- *  vidé à chaque nouvelle session (beginLiveRouting). */
+ *  vidé à chaque nouvelle session (beginLiveRouting).
+ *  [Registre de risques — plafond replay] RING BUFFER PAR TRANCHES : quand
+ *  le plafond d'événements bruts est dépassé, la tranche la plus ancienne
+ *  n'est plus jetée — elle est COMPACTÉE dans recBase (routes + progression
+ *  + phase cumulées), point de départ de toute reconstruction. La tête de
+ *  session n'est donc plus tronquée : replay et seeks restent exacts sur des
+ *  sessions arbitrairement longues, à mémoire bornée. */
+interface RecBase {
+  consumed: number // événements compactés — décalage absolu de la timeline
+  routes: Route[] // traces déjà posées au front de compactage
+  traces: number // compteur de traces cumulé
+  netsDone: number
+  netsTotal: number
+  currentNet: string
+  phase: LivePhase
+}
+const REC_TRANCHE = 1000 // taille d'une tranche compactée à la fois
+const REC_CAP = 16000 // événements bruts retenus (×2 vs plafond historique 8 000)
+const emptyRecBase = (): RecBase => ({ consumed: 0, routes: [], traces: 0, netsDone: 0, netsTotal: 0, currentNet: '—', phase: 'greedy' })
 let liveRecording: LiveQueued[] = []
+let recBase = emptyRecBase()
 let liveReplaying = false
+
+/** Applique une tranche d'événements au front compacté — mêmes sémantiques que
+ *  pushLiveTrace / setLiveProgress / dropLiveNet / setLivePhase, hors store. */
+function foldIntoBase(base: RecBase, evts: LiveQueued[]) {
+  for (const q of evts) {
+    if (q.k === 'trace') {
+      const ev = q.ev
+      const i = base.routes.findIndex((r) => r.net === ev.net)
+      if (i >= 0) {
+        const r = { ...base.routes[i], segments: [...base.routes[i].segments], vias: [...base.routes[i].vias] }
+        if (ev.type === 'segment') r.segments.push(ev.segment)
+        else r.vias.push(ev.via)
+        base.routes[i] = r
+      } else {
+        base.routes.push(
+          ev.type === 'segment'
+            ? { net: ev.net, segments: [ev.segment], vias: [], lengthMm: 0, routed: true }
+            : { net: ev.net, segments: [], vias: [ev.via], lengthMm: 0, routed: true },
+        )
+      }
+      base.traces++
+    } else if (q.k === 'progress') {
+      base.netsDone = q.p.done
+      base.netsTotal = q.p.total || base.netsTotal
+      base.currentNet = q.p.net
+      if (!q.p.ok) base.routes = base.routes.filter((r) => r.net !== q.p.net) // net réattribué
+    } else if (q.k === 'phase') base.phase = q.phase
+    else if (q.k === 'hello') { base.netsDone = 0; base.netsTotal = q.total; base.currentNet = '—' }
+  }
+  base.consumed += evts.length
+}
+
+/** Position ABSOLUE de fin de timeline = base compactée + événements bruts. */
+function recordingTotal(): number {
+  return recBase.consumed + liveRecording.filter((q) => q.k !== 'complete').length
+}
 
 /** Joue un événement de la file : trace visible, métadonnées HUD, ou finalisation. */
 function liveApplyQueued(q: LiveQueued) {
@@ -274,7 +336,12 @@ function liveEnqueue(q: LiveQueued) {
     // Enregistrement pour le replay — l'événement complete n'est PAS rejoué :
     // à la fin d'un replay le viewer retombe sur result.routing (état canonique).
     liveRecording.push(q)
-    if (liveRecording.length > 8000) liveRecording.shift()
+    if (liveRecording.length > REC_CAP) {
+      // Ring buffer par tranches : la tranche la plus ancienne est compactée
+      // dans recBase (jamais perdue) — éviction amortie O(1).
+      foldIntoBase(recBase, liveRecording.slice(0, REC_TRANCHE))
+      liveRecording = liveRecording.slice(REC_TRANCHE)
+    }
   }
   liveQueue.push(q)
   livePump()
@@ -297,16 +364,28 @@ function liveFlush() {
 }
 
 /** Reconstruction INSTANTANÉE de l'état visuel à un instant donné de la
- *  session enregistrée — le cœur du seek de la timeline : on rejoue en bloc
- *  les événements [0, upto) hors pompe (traces, phases, progression), puis
- *  la lecture normale peut reprendre de ce point. */
+ *  session enregistrée — le cœur du seek de la timeline : on repart de la
+ *  base compactée (tranches évacuées, jamais perdues), on rejoue en bloc
+ *  les événements [0, upto - consumed) hors pompe (traces, phases,
+ *  progression), puis la lecture normale peut reprendre de ce point.
+ *  `upto` est une position ABSOLUE dans la timeline [0, replayTotal]. */
 function replayRebuild(events: LiveQueued[], upto: number) {
-  const st = useStudio.getState()
+  const local = Math.max(0, Math.min(events.length, upto - recBase.consumed))
   useStudio.setState({
-    liveRoutes: [],
-    liveRouting: { ...idleLive(), active: true, source: 'replay' },
+    liveRoutes: recBase.routes.map((r) => ({ ...r, segments: [...r.segments], vias: [...r.vias] })),
+    liveRouting: {
+      ...idleLive(),
+      active: true,
+      source: 'replay',
+      phase: recBase.phase,
+      traces: recBase.traces,
+      netsDone: recBase.netsDone,
+      netsTotal: recBase.netsTotal,
+      currentNet: recBase.currentNet,
+    },
   })
-  for (const q of events.slice(0, upto)) {
+  const st = useStudio.getState()
+  for (const q of events.slice(0, local)) {
     if (q.k === 'trace') st.pushLiveTrace(q.ev)
     else if (q.k === 'progress') {
       st.setLiveProgress(q.p)
@@ -395,6 +474,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     liveEpoch++
     liveFlush()
     liveRecording = [] // le replay appartient au projet précédent
+    recBase = emptyRecBase()
     set({
       netlistId: id,
       netlist: nl,
@@ -468,6 +548,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     // effacé à chaque net du pipeline et ne garderait que les 2 derniers événements.
     if (useStudio.getState().liveRouting.active) return
     liveRecording = [] // nouvelle session → l'enregistrement du replay repart à zéro
+    recBase = emptyRecBase()
     set((s) => (s.liveRouting.active
       ? {}
       : { liveRoutes: [], liveRouting: { active: true, phase: 'greedy' as LivePhase, netsTotal: 0, netsDone: 0, currentNet: '—', traces: 0, source, lastPoint: null } }))
@@ -501,12 +582,12 @@ export const useStudio = create<StudioState>((set, get) => ({
   endLiveRouting: () => {
     liveReplaying = false
     livePaused = false
-    const total = liveRecording.filter((q) => q.k !== 'complete').length
+    const total = recordingTotal() // base compactée + événements bruts
     if (total > 0) replayTotal = total // la timeline reste consultable hors session
     set({
       liveRouting: idleLive(),
       liveRoutes: [],
-      canReplay: liveRecording.some((q) => q.k === 'trace'), // une session interrompue est rejouable aussi
+      canReplay: recBase.traces > 0 || liveRecording.some((q) => q.k === 'trace'), // une session interrompue est rejouable aussi
       replayPos: 0,
       replayTotal,
       replayPaused: false,
@@ -579,7 +660,8 @@ export const useStudio = create<StudioState>((set, get) => ({
     const s = get()
     if (s.running || s.surgicalBusy || s.liveRouting.active) return
     const events = liveRecording.filter((q) => q.k !== 'complete')
-    if (!events.some((q) => q.k === 'trace')) {
+    const base = recBase
+    if (!events.some((q) => q.k === 'trace') && base.traces === 0) {
       s.log('system', 'warn', '[REPLAY] Aucune session de routage enregistrée — lancez d’abord un routage (live ou pipeline).')
       return
     }
@@ -591,13 +673,14 @@ export const useStudio = create<StudioState>((set, get) => ({
     liveT0 = Date.now()
     get().beginLiveRouting('replay') // vide liveRoutes + repart sur un enregistrement neuf
     liveRecording = events // l'enregistrement survit à la relecture → replay rejouable à volonté
-    replayTotal = events.length
+    recBase = base // la base compactée aussi — la tête de session reste rejouée
+    replayTotal = base.consumed + events.length
     livePaused = false
     livePumpEpoch = liveEpoch
     liveQueue.push(...events)
     liveStreamDone = true // fin de flux logique : la lecture se clôturera d'elle-même
     set({ replayPos: 0, replayTotal, replayPaused: false })
-    s.log('system', 'agent', `[REPLAY] Relecture de la dernière session — ${events.length} événements à ×${s.liveSpeed} (réglable en plein vol)…`)
+    s.log('system', 'agent', `[REPLAY] Relecture de la dernière session — ${replayTotal} événements à ×${s.liveSpeed} (réglable en plein vol)…`)
     livePump()
   },
 
@@ -612,8 +695,11 @@ export const useStudio = create<StudioState>((set, get) => ({
     if (s.liveRouting.active && s.liveRouting.source !== 'replay') return // flux serveur/pipeline : intouchable
     if (!s.liveRouting.active && !s.canReplay) return
     const events = liveRecording.filter((q) => q.k !== 'complete')
-    if (!events.some((q) => q.k === 'trace')) return
-    const clamped = Math.max(0, Math.min(events.length, Math.round(index)))
+    const base = recBase
+    if (!events.some((q) => q.k === 'trace') && base.traces === 0) return
+    const total = base.consumed + events.length
+    const clamped = Math.max(0, Math.min(total, Math.round(index))) // position ABSOLUE
+    const local = Math.max(0, clamped - base.consumed) // position dans les événements bruts
     const wasReplaying = s.liveRouting.active && s.liveRouting.source === 'replay'
     liveEpoch++ // révoque la pompe/lecture courante
     liveFlush()
@@ -627,10 +713,11 @@ export const useStudio = create<StudioState>((set, get) => ({
       get().beginLiveRouting('replay') // reset liveRoutes + active=true (vide liveRecording)
     }
     liveRecording = events // l'enregistrement survit au seek
-    replayTotal = events.length
-    replayRebuild(events, clamped)
+    recBase = base // la base compactée aussi
+    replayTotal = total
+    replayRebuild(events, clamped) // repart de la base, rejoue [0, local)
     livePumpEpoch = liveEpoch
-    if (clamped < events.length) liveQueue.push(...events.slice(clamped))
+    if (local < events.length) liveQueue.push(...events.slice(local))
     set({ replayPos: clamped, replayTotal, dragRef: null, replayPaused: livePaused })
     if (!livePaused) {
       if (liveQueue.length > 0) livePump()
@@ -651,6 +738,66 @@ export const useStudio = create<StudioState>((set, get) => ({
     set({ replayPaused: false })
     if (liveQueue.length > 0) livePump()
     else if (liveStreamDone) liveFinish() // reprise sur la dernière frame → clôture
+  },
+
+  /* ---------------- Export de session [registre de risques] ----------------
+   * Compagnon du ring buffer : la session enregistrée (base compactée +
+   * événements bruts) part en JSON téléchargeable — partageable, archivable,
+   * rejouable ailleurs. L'import fera l'objet d'un chantier dédié (P1.4). */
+  exportReplaySession: () => {
+    const s = get()
+    const events = liveRecording.filter((q) => q.k !== 'complete')
+    if (!events.some((q) => q.k === 'trace') && recBase.traces === 0) {
+      s.log('system', 'warn', '[REPLAY] Aucune session à exporter — lancez d’abord un routage.')
+      return
+    }
+    const total = recBase.consumed + events.length
+    const data = {
+      format: 'nexus-replay',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      project: { id: s.netlistId, name: s.netlist.name, board: s.netlist.board },
+      stats: { total, baseCompactee: recBase.consumed, bruts: events.length, traces: recBase.traces },
+      base: recBase,
+      events,
+    }
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `nexus-replay-${s.netlistId}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    s.log('system', 'agent', `[REPLAY] Session exportée — ${total} événements (base ${recBase.consumed} + bruts ${events.length}, ${recBase.traces} traces compactées) — JSON ${a.download}`)
+  },
+
+  /* Hook E2E — injection synthétique dans l'enregistrement uniquement : on
+   * écrit dans le ring buffer AVEC la même éviction par tranches que
+   * liveEnqueue, mais sans passer par la file de lecture (17k événements
+   * seraient sinon dépilés à 14 ms/s). Publie canReplay/replayTotal pour
+   * rendre la session injectable consultable (barre replay + timeline). */
+  testInjectRecording: (n) => {
+    for (let i = 0; i < n; i++) {
+      const m = i % 5
+      let q: LiveQueued
+      if (m < 3) {
+        const net = `T${Math.floor(i / 5)}`
+        const x = 2 + (i % 30)
+        q = { k: 'trace', ev: { type: 'segment', net, segment: { net, pts: [{ x, y: 2 }, { x: x + 1, y: 4 }], layer: 0, width: 0.25 } } }
+      } else if (m === 3) {
+        q = { k: 'progress', p: { done: Math.floor(i / 5), total: Math.ceil(n / 5), net: `T${Math.floor(i / 5)}`, ok: true } }
+      } else {
+        q = { k: 'phase', phase: 'greedy' }
+      }
+      liveRecording.push(q)
+      if (liveRecording.length > REC_CAP) {
+        foldIntoBase(recBase, liveRecording.slice(0, REC_TRANCHE))
+        liveRecording = liveRecording.slice(REC_TRANCHE)
+      }
+    }
+    const total = recordingTotal()
+    set({ canReplay: true, replayTotal: total, replayPos: 0 })
+    get().log('system', 'agent', `[TEST] ${n} événements synthétiques injectés — timeline ${total} évts (base ${recBase.consumed} + bruts ${liveRecording.length}, ${recBase.traces} traces compactées)`)
   },
 
   /* ---------------- Undo / Redo multi-niveaux chirurgicaux [Flux.ai] --------
@@ -862,6 +1009,7 @@ export const useStudio = create<StudioState>((set, get) => ({
     liveFlush()
     liveStreamDone = false
     liveRecording = []
+    recBase = emptyRecBase()
     replayTotal = 0
     set({ stages: initialStages(), result: {}, livePlacements: null, costHistory: [], plan: null, running: false, cancelled: false, liveRouting: idleLive(), liveRoutes: [], placementHistory: [], redoStack: [], canReplay: false, replayPos: 0, replayTotal: 0, replayPaused: false, dragRef: null })
   },
@@ -908,9 +1056,9 @@ export const useStudio = create<StudioState>((set, get) => ({
 
       const routeRate = result.routing.routedNets / Math.max(1, result.routing.totalNets)
       const status = result.drc.errors === 0 && routeRate >= 0.98 ? 'success' : routeRate > 0.8 ? 'partial' : 'error'
-      const recTotal = liveRecording.filter((q) => q.k !== 'complete').length
+      const recTotal = recordingTotal() // base compactée + événements bruts
       if (recTotal > 0) replayTotal = recTotal
-      set({ result, running: false, liveRouting: idleLive(), liveRoutes: [], canReplay: liveRecording.some((q) => q.k === 'trace'), replayPos: 0, replayTotal: recTotal })
+      set({ result, running: false, liveRouting: idleLive(), liveRoutes: [], canReplay: recBase.traces > 0 || liveRecording.some((q) => q.k === 'trace'), replayPos: 0, replayTotal: recTotal })
       get().log('system', status === 'success' ? 'success' : 'warn',
         `═══ CONCEPTION TERMINÉE en ${((Date.now() - t0) / 1000).toFixed(1)} s — DFM ${result.dfm.score}/100, ${result.drc.errors} erreur(s) DRC ═══`)
 

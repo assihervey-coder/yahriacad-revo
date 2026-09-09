@@ -10,7 +10,7 @@
  * et TIMELINE seekable : scrub, avance, recul, pause — dans la session.
  */
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Pause, Play, RotateCcw, SkipBack, SkipForward, Square } from 'lucide-react'
+import { ChevronDown, ChevronUp, Download, Pause, Play, RotateCcw, SkipBack, SkipForward, Square } from 'lucide-react'
 import { useStudio } from '@/lib/studio-store'
 
 /* [audit P0.1] Les conteneurs du HUD sont TRAVERSAUX aux événements pointeur
@@ -153,6 +153,7 @@ export function LiveRoutingHud() {
   const stopLiveRouting = useStudio((s) => s.stopLiveRouting)
   const canReplay = useStudio((s) => s.canReplay)
   const replayLastRouting = useStudio((s) => s.replayLastRouting)
+  const exportReplaySession = useStudio((s) => s.exportReplaySession)
   const replayTotal = useStudio((s) => s.replayTotal)
 
   /* Repli compact — automatique sur fenêtre contrainte [audit P0.1],
@@ -177,6 +178,13 @@ export function LiveRoutingHud() {
               <RotateCcw className="h-3 w-3" /> REPLAY
             </button>
             <span className="font-mono text-[9px] text-neutral-500">{replayTotal} évts</span>
+            <button
+              onClick={exportReplaySession}
+              title="Exporter la session enregistrée (JSON — base compactée + événements)"
+              className="pointer-events-auto rounded p-0.5 text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-violet-300"
+            >
+              <Download className="h-3 w-3" />
+            </button>
             <CollapseButton compact onToggle={() => setCompact(false)} />
           </div>
         </div>
@@ -199,7 +207,14 @@ export function LiveRoutingHud() {
           <div className="border-l border-neutral-800 pl-2">
             <SpeedSelector liveSpeed={liveSpeed} setLiveSpeed={setLiveSpeed} />
           </div>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-0.5">
+            <button
+              onClick={exportReplaySession}
+              title="Exporter la session enregistrée (JSON — base compactée + événements, partageable et rejouable)"
+              className="pointer-events-auto rounded p-0.5 text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-violet-300"
+            >
+              <Download className="h-3 w-3" />
+            </button>
             <CollapseButton compact={false} onToggle={() => setCompact(true)} />
           </div>
         </div>

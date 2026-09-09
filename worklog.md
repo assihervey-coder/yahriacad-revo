@@ -205,3 +205,22 @@ Work Log:
 Stage Summary:
 - Le P0.1 de l'audit est soldé : les panneaux flottants ne volent plus aucun geste à la carte — l'arrière-plan est traversant partout, seuls les contrôles interceptent, et un repli compact automatique libère quasi toute la vue sur les petites fenêtres.
 - Aucune régression fonctionnelle : vitesse réglable, timeline seekable, interruption et lancement de replay opèrent à l'identique depuis les deux gabarits (déplié et pilule).
+
+---
+Task ID: 10
+Agent: Super Z (agent principal)
+Task: Remédier immédiatement au registre de risques de l'audit — P0.2 (E2E 3 résolutions), P0.3 (hook pre-push), P0.4 (tsc au vert), plafond replay (ring buffer par tranches + export de session) — puis commit + push.
+
+Work Log:
+- P0.4 — tsconfig : exclusion de examples/ et skills/ → `bunx tsc --noEmit` GLOBAL à 0 erreur (contre 4 résidus hors scope avant).
+- P0.3 — scripts/hooks/pre-push (core.hooksPath configuré + `bun run setup:hooks`) : 1) suite moteur hors-ligne — échec si « TOUS LES TESTS PASSENT » absent ; 2) smoke SSE — démarre lui-même le serveur dev sur :3000 s'il est absent (90 s max), le tue après si démarré par le hook. Testé en direct : 69 assertions moteur + SSE en ~15 s, exit 0. Scripts npm : test:engine, test:sse, test:e2e, setup:hooks.
+- P0.2 — scripts/e2e-resolutions.ts (bun + agent-browser, `bun run test:e2e`) : à 1280×800, 1600×900 et 1920×1080 — lance le pipeline, attend la barre replay, puis 10 contrôles par résolution : barre dépliée par défaut, timeline visible, arrière-plan TRAVERSANT (2 points elementFromPoint), REPLAY ciblé, ×2 cliquable+sélectionnée, pilule compacte sans timeline, pilule traversante, redépliage, zéro erreur page/console. Bilan 33/33 TOUS LES TESTS PASSENT.
+- Ring buffer par tranches [registre : plafond replay] : plus aucun `shift()` destructeur — REC_CAP porté à 16 000 évts bruts et la tranche la plus ancienne (1 000) est COMPACTÉE dans recBase (routes + progression + phase + compteurs, mêmes sémantiques que pushLiveTrace/dropLiveNet/setLiveProgress) ; replayTotal/canReplay/positions deviennent ABSOLUS (base.consumed + bruts) ; replayRebuild repart de la base puis rejoue le segment brut ; seekReplay/replayLastRouting préservent la base à travers beginLiveRouting ; setProject/reset purgent la base.
+- Export de session [registre : mitigation] : exportReplaySession() — JSON {format, version, project, stats, base, events} téléchargé (nexus-replay-<projet>-<date>.json), bouton ⬇ dans la barre replay dépliée ET la pilule compacte ; l'import reste à faire (P1.4).
+- Hook E2E : testInjectRecording(n) écrit directement dans le ring buffer (même éviction que liveEnqueue, sans la file de lecture) et publie canReplay/replayTotal — indispensable pour éprouver >16k sans router des milliers de nets.
+- E2E ring buffer (1440×900) : injection de 18 500 évts → base compactée EXACTEMENT 3 000 (traces 1 800, nets 600, netsTotal 3 700) + 15 500 bruts ; replay lancé → seek ABSOLU 0 → reconstruction pure base (1 800 traces / 600 routes) ; seek ABSOLU 9 000 → base + 6 000 rejoués (5 400 traces / 1 800 routes) ; saut à la fin → clôture canonique (session fermée, total conservé 18 500) ; export → log de confirmation. Pipeline RÉEL ensuite : 178 évts, base 0, 9/9 stages done, seules erreurs = DRC-OPEN légitimes (3 nets, résultat 26/28 connu).
+- Vérifications : tsc global 0 erreur ; suite moteur TOUS LES TESTS PASSENT ; zéro erreur page navigateur ; capture /tmp/ring-buffer-bar.png.
+
+Stage Summary:
+- Les 4 items P0 de l'audit sont soldés (P0.1 la veille + P0.2/P0.3/P0.4 ici) et le registre de risques perd son item code : le plafond replay ne tronque plus rien (ring buffer par tranches à mémoire bornée, tête de session compactée et rejouable), et la session s'exporte en JSON.
+- La régression est devenue bloquante : tout push exécute désormais la suite moteur + le smoke SSE, et l'E2E multi-résolutions est rejouable en une commande.
