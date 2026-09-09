@@ -308,6 +308,9 @@ console.log('\n════════ P1.1 — Pile 4 couches (NEXUS-CORE) ═
   const routing4 = await routeAll(nl4, placement4.placements, DEFAULT_RULES, constraints4)
   const rate4 = routing4.routedNets / routing4.totalNets
   assert(rate4 >= 0.75, `routage 4 couches ${routing4.routedNets}/${routing4.totalNets} (${(rate4 * 100).toFixed(0)} %) — ${routing4.viaCount} vias, ${routing4.totalLengthMm.toFixed(0)} mm`)
+  // [M5] DoD densification : NEXUS-CORE quatre couches à 27/28 nets ou mieux
+  assert(routing4.routedNets >= 27, `M5 DoD : 4 couches ≥ 27/28 nets — obtenu ${routing4.routedNets}/28`)
+  assert((routing4.extraLayerNets ?? 0) >= 0 && routing4.planes?.length === 2, `M5 : passes additives traçables (${routing4.extraLayerNets ?? 0} net(s) via paire de couches supplémentaire), plans intacts`)
   assert(!!routing4.planes && routing4.planes.length === 2, `plans cuivre générés : ${routing4.planes?.map((p) => `L${p.layer} ${p.net}`).join(' + ') ?? 'aucun'}`)
   const masse = routing4.planes?.find((p) => p.cls === 'ground')
   const alim = routing4.planes?.find((p) => p.cls === 'power')
@@ -327,6 +330,19 @@ console.log('\n════════ P1.1 — Pile 4 couches (NEXUS-CORE) ═
 
   const gerber4 = generateGerber(nl4, placement4.placements, routing4)
   assert(gerber4.files.length === 8, `export 4 couches : ${gerber4.files.length} fichiers (F_Cu, In1_Cu, In2_Cu, B_Cu + contour + drill + BOM + POS)`)
+
+  // [M5] rip-up étendu (opt-in) : rounds portés à 14, 3 bloquants, relance
+  // perturbée — ne doit jamais descendre sous le comportement par défaut
+  const routing4x = await routeAll(nl4, placement4.placements, DEFAULT_RULES, constraints4, { ripupRounds: 14 })
+  assert(routing4x.routedNets >= 27, `M5 : rip-up étendu (14 rounds, 3 bloquants, perturbation) ≥ 27/28 — obtenu ${routing4x.routedNets}/28`)
+
+  // [M5] pile 6 couches : paire de couches supplémentaire paramétrable —
+  // exports et routage génériques
+  const nl6 = { ...base, board: { ...base.board, layers: 6 } }
+  const routing6 = await routeAll(nl6, placement4.placements, DEFAULT_RULES, constraints4)
+  assert(routing6.routedNets >= routing4.routedNets, `M5 : pile 6 couches ≥ pile 4 — ${routing6.routedNets}/${routing6.totalNets}`)
+  const gerber6 = generateGerber(nl6, placement4.placements, routing6)
+  assert(gerber6.files.some((f) => f.name === 'In4_Cu.gbr') && !gerber6.files.some((f) => f.name === 'In5_Cu.gbr'), `M5 : exports 6 couches génériques (F_Cu + In1..In4 + B_Cu)`)
   const in2 = gerber4.files.find((f) => f.name === 'In2_Cu.gbr')!
   assert(!!in2 && in2.content.includes('D03'), 'Gerber In2_Cu.gbr : flashes du plan de masse présents')
   const bcu4 = gerber4.files.find((f) => f.name === 'B_Cu.gbr')!

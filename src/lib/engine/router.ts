@@ -82,6 +82,8 @@ export interface RouterOptions {
   /** Rythme du flux : pause (ms) après chaque émission de traces d'une branche.
    *  0 = rendu plein régime (le navigateur peint quand même entre les branches). */
   pacingMs?: number
+  /** [M5] nombre maximal de rounds de rip-up & reroute (défaut 14) */
+  ripupRounds?: number
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -97,7 +99,7 @@ export async function routeAll(
   const t0 = Date.now()
   const cols = Math.ceil(nl.board.w / RES)
   const rows = Math.ceil(nl.board.h / RES)
-  const L = Math.max(2, Math.min(4, nl.board.layers || 2)) // couches cuivre (2 ou 4) [P1.1]
+  const L = Math.max(2, Math.min(6, nl.board.layers || 2)) // couches cuivre (2/4/6) [P1.1+M5]
   const L4 = L >= 4
   const cells = cols * rows
   const total = cells * L
@@ -110,7 +112,10 @@ export async function routeAll(
   const edgeBlock = new Uint8Array(cells)       // marge de bord seule (plans cuivre)
   const padNet = new Int16Array(total).fill(-1) // cellule-pad (couche 0) → index de net propriétaire
   const padNetL1 = new Int16Array(total).fill(-1) // réserve d'échappatoire L1 au-dessus des pads
-  const keepBlock = new Uint8Array(total)       // keepout RF (2 couches)
+  const keepBlock = new Uint8Array(total)       // keepout RF (couche top)
+  const keepSoft = new Uint8Array(total)        // [M5] anneau INTÉRIEUR du keepout (jamais excavable)
+  const penalty = new Float32Array(total)       // [M5] surcoût doux (perturbation de rip-up)
+  const excavated = new Set<number>()           // [M5] nets autorisés à traverser l'anneau excavé
   const occupied = new Int16Array(total).fill(-1) // cellules cuivre prises
   const dilated = new Int16Array(total).fill(-1)  // zone de clearance interdite
   const pairCorridor = new Int16Array(total).fill(-1) // [P1.2] corridor d'appariement (propriétaire = 1er membre)
@@ -193,7 +198,7 @@ export async function routeAll(
     }
   }
 
-  // Keepout RF (autour des composants marqués keepout)
+  // Keepout RF (autour des composants marqués keepout) + anneau excavable [M5]
   for (const cst of constraints) {
     if (cst.kind !== 'keepout') continue
     for (const ref of cst.refs) {
@@ -201,14 +206,19 @@ export async function routeAll(
       if (!c || !p) continue
       const r = placedRect(p, c)
       const m = (cst.value ?? 5)
+      const mSoft = Math.max(2 * RES, m / 2) // anneau intérieur : moitié collée au composant
       const x0 = Math.max(0, Math.floor((r.x - r.w / 2 - m) / RES)), x1 = Math.min(cols - 1, Math.ceil((r.x + r.w / 2 + m) / RES))
       const y0 = Math.max(0, Math.floor((r.y - r.h / 2 - m) / RES)), y1 = Math.min(rows - 1, Math.ceil((r.y + r.h / 2 + m) / RES))
+      const xs0 = Math.max(0, Math.floor((r.x - r.w / 2 - mSoft) / RES)), xs1 = Math.min(cols - 1, Math.ceil((r.x + r.w / 2 + mSoft) / RES))
+      const ys0 = Math.max(0, Math.floor((r.y - r.h / 2 - mSoft) / RES)), ys1 = Math.min(rows - 1, Math.ceil((r.y + r.h / 2 + mSoft) / RES))
       for (let y = y0; y <= y1; y++)
         for (let x = x0; x <= x1; x++) {
           // keepout RF sur la couche supérieure uniquement : le plan de masse
           // en couche inférieure sous l'antenne est une bonne pratique RF
           keepBlock[idxOf(x, y)] = 1
         }
+      for (let y = ys0; y <= ys1; y++)
+        for (let x = xs0; x <= xs1; x++) keepSoft[idxOf(x, y)] = 1
     }
   }
 
@@ -240,7 +250,8 @@ export async function routeAll(
     for (const v of vias) {
       const x = Math.min(cols - 1, Math.max(0, Math.round(v.x / RES)))
       const y = Math.min(rows - 1, Math.max(0, Math.round(v.y / RES)))
-      mark(idxOf(x, y), viaRadius); mark(cells + idxOf(x, y), viaRadius)
+      // [M5] le barrel d'un via traverse toutes les couches : antipad partout
+      for (let l = 0; l < L; l++) mark(l * cells + idxOf(x, y), viaRadius)
     }
   }
 
@@ -254,24 +265,32 @@ export async function routeAll(
 
   /** Coût d'une transition de couche (via) — majoré par le via_minimizer [DeepPCB] */
   let viaCost = 14
+  /** [M5] surcoût par cellule sur les couches de plans (L≥4) : les signaux
+   *  n'y passent qu'en corridor de secours, l'intégrité des plans est préférée.
+   *  La pénalité devient quasi verrouillante pendant via-min (éliminer un via
+   *  ne doit pas s'acheter en coupant les plans). */
+  let planeLayerPenalty = 0.6
 
   function passable(i: number, ni: number, relaxed = false): boolean {
     if (occupied[i] !== -1 && occupied[i] !== ni) return false
     if (!relaxed && dilated[i] !== -1 && dilated[i] !== ni) return false
     if (padNet[i] !== -1 && padNet[i] !== ni) return false
     // Échappatoire L1 au-dessus des pads : réservée aux nets non encore routés
-    if (i >= cells) {
+    // (couche 1 EXCLUSIVEMENT — en multi-couches, i ≥ cells ne veut plus dire L1)
+    if (i >= cells && i < 2 * cells) {
       const p1 = padNetL1[i - cells]
       if (p1 !== -1 && p1 !== ni && !routedSet.has(p1)) return false
     }
     // [P1.2] corridor d'appariement : réservé au propriétaire et à son partenaire
     const pc = pairCorridor[i]
     if (pc !== -1 && pc !== ni && pairOf.get(pc) !== ni) return false
-    if (keepBlock[i] && !isRfNet(ni) && padNet[i] !== ni) return false
+    // [M5] keepout : infranchissable — sauf anneau EXCAVÉ (extérieur, hors noyau
+    // keepSoft) pour un net au désespoir, accord de conception tracé au résultat
+    if (keepBlock[i] && !isRfNet(ni) && padNet[i] !== ni && !(excavated.has(ni) && !keepSoft[i])) return false
     return true
   }
 
-  function search(tree: Set<number>, source: number, ni: number, relaxed = false): number[] | null {
+  function search(tree: Set<number>, source: number, ni: number, relaxed = false, allLayers = false): number[] | null {
     stamp++
     const heap = new MinHeap()
     const sb = source % cells
@@ -298,30 +317,46 @@ export async function routeAll(
         return path.reverse()
       }
       if (++expansions > 150000) return null
-      const layer = cur < cells ? 0 : 1
+      // [M5] allLayers=false (défaut) : comportement P1.1 bicouche exact —
+      // les passes glouton/rip-up/via-min restent bit-à-bit celles de la
+      // priorité 1. allLayers=true (passe additive « paire de couches
+      // supplémentaire ») : la couche est déduite du nœud, vias adjacents.
+      const layer = allLayers ? Math.floor(cur / cells) : cur < cells ? 0 : 1
       const base = cur % cells
       const x = base % cols, y = Math.floor(base / cols)
       const layerBase = layer * cells
       const neighbors: [number, number][] = []
-      // Mouvements latéraux SUR LA MÊME COUCHE (coût uniforme)
-      if (x > 0) neighbors.push([layerBase + base - 1, 1])
-      if (x < cols - 1) neighbors.push([layerBase + base + 1, 1])
-      if (y > 0) neighbors.push([layerBase + base - cols, 1])
-      if (y < rows - 1) neighbors.push([layerBase + base + cols, 1])
-      // Via : couche opposée, même cellule
-      neighbors.push([cells - layerBase + base, VIA_COST])
+      // Mouvements latéraux SUR LA MÊME COUCHE — en multi-couches, surcoût doux
+      // sur les couches de plans (L≥4 : préférence pour les couches de signal,
+      // les plans ne sont utilisés qu'en corridor de secours ; ground/power exemptés).
+      const planeLayer = L4 && layer >= 2 && layer <= 3
+      const lateralCost = allLayers && planeLayer && nl.nets[ni].cls !== 'ground' && nl.nets[ni].cls !== 'power'
+        ? 1 + planeLayerPenalty
+        : 1
+      if (x > 0) neighbors.push([layerBase + base - 1, lateralCost])
+      if (x < cols - 1) neighbors.push([layerBase + base + 1, lateralCost])
+      if (y > 0) neighbors.push([layerBase + base - cols, lateralCost])
+      if (y < rows - 1) neighbors.push([layerBase + base + cols, lateralCost])
+      if (allLayers) {
+        // Vias ADJACENTS (couche l ↔ l±1) — généralisés à toutes les paires [M5]
+        if (layer > 0) neighbors.push([layerBase - cells + base, VIA_COST])
+        if (layer < L - 1) neighbors.push([layerBase + cells + base, VIA_COST])
+      } else {
+        // Via : couche opposée, même cellule (comportement P1.1)
+        neighbors.push([cells - layerBase + base, VIA_COST])
+      }
       for (const [nb, cost] of neighbors) {
         if (nb < 0 || nb >= total) continue
-        const layerNb = nb < cells ? 0 : 1
+        const layerNb = Math.floor(nb / cells)
         const isVia = layerNb !== layer
         if (isVia) {
           // un via ne se pose jamais dans le corps d'un composant (couche top)
           if (bodyBlocked[nb] && padNet[nb] !== ni) continue
-        } else if (layerNb === 0 && bodyBlocked[nb] && padNet[nb] !== ni) {
-          continue // piste sur le cuivre supérieur : corps interdit
+        } else if (layerNb !== 1 && bodyBlocked[nb] && padNet[nb] !== ni) {
+          continue // corps sur la couche top ; marge de bord sur les couches internes (multi-couches)
         }
         if (!passable(nb, ni, relaxed)) continue
-        const ng = gVal[cur] + cost
+        const ng = gVal[cur] + cost + penalty[nb] // [M5] perturbation de rip-up
         if (gStamp[nb] !== stamp || ng < gVal[nb]) {
           gStamp[nb] = stamp; gVal[nb] = ng; parent[nb] = cur
           heap.push(nb, ng + h(nb))
@@ -615,7 +650,7 @@ export async function routeAll(
   /** Tente de router entièrement un net (croissance d'arbre, broches les plus proches d'abord).
    *  Asynchrone et coopérative : à chaque branche posée, les traces fraîches sont émises
    *  au flux live puis une pause laisse le transport (SSE) ou le navigateur respirer. */
-  async function attemptRoute(ni: number): Promise<{ ok: boolean; blockedAt?: number }> {
+  async function attemptRoute(ni: number, extraLayers = false): Promise<{ ok: boolean; blockedAt?: number }> {
     const net = nl.nets[ni]
     const pinCells = netPinsCells.get(ni)!
     const w = widthOfNet(ni)
@@ -653,8 +688,8 @@ export async function routeAll(
       // masse & puissance : tentative relâchée d'emblée (elles ont le droit de passer
       // dans les zones de clearance des autres, jamais sur leur cuivre)
       const relaxedFirst = net.cls === 'ground' || net.cls === 'power'
-      let path = relaxedFirst ? search(tree, target, ni, true) : search(tree, target, ni)
-      if (!path) path = search(tree, target, ni, true) // repli : clearance relâchée
+      let path = relaxedFirst ? search(tree, target, ni, true, extraLayers) : search(tree, target, ni, false, extraLayers)
+      if (!path) path = search(tree, target, ni, true, extraLayers) // repli : clearance relâchée
       if (!path) {
         if (process.env.NEXUS_DEBUG) {
           const net2 = nl.nets[ni]
@@ -720,23 +755,27 @@ export async function routeAll(
     return { ok: true }
   }
 
-  /** Trouve le net routé dont le cuivre bloque le plus la broche en échec
-   *  (en excluant les rip-ups déjà tentés et échoués pour ce net) */
-  function findBlocker(fi: number, blockedAt: number): number {
+  /** [M5] Trouve les N nets routés dont le cuivre bloque le plus la broche en
+   *  échec (les plus proches d'abord, en excluant les rip-ups déjà tentés et
+   *  échoués pour ce net). Le rip-up étendu essaie chaque bloquant tour à tour. */
+  function findBlockers(fi: number, blockedAt: number, max: number): number[] {
     const bx2 = blockedAt % cols, by2 = Math.floor(blockedAt / cols)
     const tried = triedRip.get(fi) ?? new Set<number>()
-    let best = -1, bestD = Infinity
+    const scored: { ri: number; d: number }[] = []
     for (const [ri, st] of routedStore) {
       // [P1.2] les membres d'une paire différentielle ne sont jamais déchirés :
       // leur longueur appariée est garantie par la passe de réconciliation
       if (ri === fi || tried.has(ri) || pairOf.has(ri)) continue
+      let best = Infinity
       for (let i = 0; i < st.tree.length; i += 2) {
         const c = st.tree[i] % cells
         const d = Math.abs((c % cols) - bx2) + Math.abs(Math.floor(c / cols) - by2)
-        if (d < bestD) { bestD = d; best = ri }
+        if (d < best) best = d
       }
+      if (best < Infinity) scored.push({ ri, d: best })
     }
-    return best
+    scored.sort((a, b) => a.d - b.d)
+    return scored.slice(0, max).map((s) => s.ri)
   }
 
   /* ---- Passe 1 : routage glouton par criticité (flux live activé) ---- */
@@ -765,10 +804,32 @@ export async function routeAll(
   }
   emitLive = false
 
-  /* ---- Passe 2 : RIP-UP & REROUTE (jusqu'à 8 rounds, rip multi-bloquants) ---- */
+  /* ---- Passe 2 : RIP-UP & REROUTE étendu [M5] ----
+   * Jusqu'à `ripupRounds` rounds (défaut 14) : pour chaque net en échec,
+   * essais successifs des bloquants les plus proches (jusqu'à 3), puis
+   * relance avec PERTURBATION douce autour de la cellule bloquée — le surcoût
+   * écarte l'A* de son corridor habituel et fait explorer d'autres chemins
+   * (y compris la paire de couches supplémentaire sur les piles ≥ 4). */
   opts.onPhase?.('ripup')
   routerCtx = 'ripup'
-  for (let round = 0; round < 8 && failedNets.size > 0; round++) {
+  const excavatedRoutes = new Set<number>()
+  const extraLayerRoutes = new Set<number>()
+  const ripupRounds = opts.ripupRounds ?? 8
+  const wide = opts.ripupRounds !== undefined && opts.ripupRounds > 8 // rip-up étendu [M5] : opt-in (rounds > 8)
+  /** [M5] applique une perturbation douce en anneau autour d'une cellule —
+   *  STRICTEMENT locale à la relance du net en échec (jamais aux autres nets :
+   *  la pénalité est posée puis retirée autour d'un unique attemptRoute). */
+  const perturbAround = (blockedAt: number) => {
+    const bx2 = blockedAt % cols, by2 = Math.floor(blockedAt / cols)
+    for (let dy = -4; dy <= 4; dy++)
+      for (let dx = -4; dx <= 4; dx++) {
+        const nx = bx2 + dx, ny = by2 + dy
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue
+        const j = idxOf(nx, ny)
+        penalty[j] = Math.max(penalty[j], 6)
+      }
+  }
+  for (let round = 0; round < ripupRounds && failedNets.size > 0; round++) {
     if (opts.shouldCancel?.()) break
     let progress = false
     for (const fi of [...failedNets]) {
@@ -776,30 +837,98 @@ export async function routeAll(
       const probe = await attemptRoute(fi)
       const blockedAt = probe.blockedAt
       if (blockedAt === undefined) { failedNets.delete(fi); triedRip.delete(fi); progress = true; continue }
-      const blocker = findBlocker(fi, blockedAt)
-      if (blocker === -1) continue
-      const snapshot = new Map(routedStore)
-      const blockerNet = nl.nets[blocker].name
-      routedStore.delete(blocker)
-      rebuildMasks()
-      const rF = await attemptRoute(fi)
-      if (rF.ok) {
-        failedNets.delete(fi)
-        triedRip.delete(fi)
-        opts.onProgress?.({ done, total: ordered.length, net: `${nl.nets[fi].name} (rip-up de ${blockerNet})`, ok: true })
-        const rB = await attemptRoute(blocker)
-        if (!rB.ok) failedNets.add(blocker)
-        progress = true
-      } else {
-        // Échec : mémorise ce bloquant pour tenter le suivant au prochain round
+      const blockers = findBlockers(fi, blockedAt, wide ? 3 : 1)
+      let routed = false
+      for (const blocker of blockers) {
+        const snapshot = new Map(routedStore)
+        const blockerNet = nl.nets[blocker].name
+        routedStore.delete(blocker)
+        rebuildMasks()
+        const rF = await attemptRoute(fi)
+        if (rF.ok) {
+          failedNets.delete(fi)
+          triedRip.delete(fi)
+          opts.onProgress?.({ done, total: ordered.length, net: `${nl.nets[fi].name} (rip-up de ${blockerNet})`, ok: true })
+          const rB = await attemptRoute(blocker)
+          if (!rB.ok) failedNets.add(blocker)
+          progress = true
+          routed = true
+          break
+        }
+        // Échec : mémorise ce bloquant pour tenter le suivant
         if (!triedRip.has(fi)) triedRip.set(fi, new Set())
         triedRip.get(fi)!.add(blocker)
         routedStore.clear()
         for (const [k, v] of snapshot) routedStore.set(k, v)
         rebuildMasks()
       }
+      if (routed) continue
+      if (!wide) continue
+      // [M5] relance PERTURBÉE immédiate (rip-up étendu seulement) : le surcoût
+      // en anneau écarte l'A* de son corridor habituel — posé puis retiré pour
+      // ce seul net, sans toucher aux règles dures ni au routage des autres
+      perturbAround(blockedAt)
+      const rP = await attemptRoute(fi)
+      penalty.fill(0)
+      if (rP.ok) {
+        failedNets.delete(fi)
+        triedRip.delete(fi)
+        opts.onProgress?.({ done, total: ordered.length, net: `${nl.nets[fi].name} (relance perturbée)`, ok: true })
+        progress = true
+      }
     }
     if (!progress) break
+  }
+
+  /* ---- Passe 2b : PAIRE DE COUCHES SUPPLÉMENTAIRE [M5] ----
+   * Les couches internes (plans L2/L3 d'une pile 4) deviennent routables en
+   * corridor de secours pour les nets ENCORE EN ÉCHEC uniquement — passe
+   * strictement ADDITIVE : aucun net déjà routé n'est déchiré, le comportement
+   * bicouche des passes précédentes reste celui de la priorité 1. */
+  if (L > 2 && failedNets.size > 0) {
+    routerCtx = 'extra-layers'
+    for (const fi of [...failedNets]) {
+      if (opts.shouldCancel?.()) break
+      const r = await attemptRoute(fi, true)
+      if (r.ok) {
+        failedNets.delete(fi)
+        triedRip.delete(fi)
+        extraLayerRoutes.add(fi)
+        opts.onProgress?.({ done, total: ordered.length, net: `${nl.nets[fi].name} (paire de couches supplémentaire)`, ok: true })
+        // [M5] minimisation des vias de secours : re-route avec via majoré en
+        // restant multi-couches — une variante moins de vias remplace la 1re
+        viaCost = 60
+        planeLayerPenalty = 12
+        const before = routedStore.get(fi)!
+        routedStore.delete(fi)
+        rebuildMasks()
+        const rOpt = await attemptRoute(fi, true)
+        const after = routedStore.get(fi)
+        if (!rOpt.ok || !after || after.vias.length >= before.vias.length) {
+          routedStore.set(fi, before)
+          rebuildMasks()
+        }
+        viaCost = 14
+        planeLayerPenalty = 0.6
+      }
+    }
+  }
+
+  /* ---- Passe 2a : EXCAVATION DE KEEPOUT [M5] ----
+   * Dernier recours pour les nets encore bloqués : autorise le passage dans
+   * l'anneau EXTÉRIEUR d'un keepout (le noyau interne keepSoft reste
+   * infranchissable). Accord de conception tracé sur la route. */
+  for (const fi of [...failedNets]) {
+    if (opts.shouldCancel?.()) break
+    excavated.add(fi)
+    const r = await attemptRoute(fi)
+    if (r.ok) {
+      failedNets.delete(fi)
+      excavatedRoutes.add(fi)
+      opts.onProgress?.({ done, total: ordered.length, net: `${nl.nets[fi].name} (excavation keepout)`, ok: true })
+    } else {
+      excavated.delete(fi)
+    }
   }
 
   /* ---- Passe 2b : MINIMISATION DES VIAS [DeepPCB via_minimizer] ----
@@ -813,6 +942,7 @@ export async function routeAll(
     opts.onPhase?.('via-min')
     routerCtx = 'via-min'
     viaCost = 46
+    planeLayerPenalty = 24 // [M5] via-min reste sur les couches de signal
     // [P1.2] les membres d'une paire différentielle sont exclus : leur longueur
     // appariée prime sur l'économie de vias
     const candidates = [...routedStore.keys()].filter((ni) => routedStore.get(ni)!.vias.length > 0 && !pairOf.has(ni))
@@ -833,6 +963,7 @@ export async function routeAll(
       }
     }
     viaCost = 14
+    planeLayerPenalty = 0.6
   }
 
   /* ---- Passe 2c : RÉCONCILIATION DES PAIRES [P1.2] ----
@@ -931,6 +1062,9 @@ export async function routeAll(
       const free = (base: number) => {
         if (edgeBlock[base]) return false
         if (padNet[base] === ni) return true
+        // [M5] un signal ayant emprunté la couche du plan en corridor de
+        // secours interdit l'inondation sur sa trace (court-circuit)
+        if (occupied[layer * cells + base] !== -1) return false
         return viaAnti[layer * cells + base] === -1 && padNet[base] === -1
       }
       // flood multi-source : une source par pad non encore couvert (le plan peut
@@ -1087,7 +1221,13 @@ export async function routeAll(
       totalLen += st.lengthMm
       viaCount += st.vias.length
       const pr = pairMeta.get(ni)
-      routes.push({ net: net.name, segments: st.segments, vias: st.vias, lengthMm: Math.round(st.lengthMm * 10) / 10, routed: true, ...(pr ? { pair: pr } : {}) })
+      routes.push({
+        net: net.name, segments: st.segments, vias: st.vias,
+        lengthMm: Math.round(st.lengthMm * 10) / 10, routed: true,
+        ...(extraLayerRoutes.has(ni) ? { extraLayer: true } : {}),
+        ...(excavatedRoutes.has(ni) ? { keepoutExcavated: true } : {}),
+        ...(pr ? { pair: pr } : {}),
+      })
     } else if (groundPour && nl.nets[ni].cls === 'ground') {
       routedCount++
       routes.push({ net: net.name, segments: [], vias: [], lengthMm: 0, routed: true, pour: true })
@@ -1109,6 +1249,7 @@ export async function routeAll(
     totalLengthMm: Math.round(totalLen * 10) / 10,
     viaCount,
     viasRemoved,
+    extraLayerNets: extraLayerRoutes.size,
     groundPour,
     planes: planes.length > 0 ? planes : undefined,
     durationMs: Date.now() - t0,

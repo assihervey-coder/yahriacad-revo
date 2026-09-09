@@ -236,13 +236,19 @@ export function generateGerber(
     '',
   ].join('\n')
 
+  // [M5] pile générique : F_Cu + internes + B_Cu — la paire de couches
+  // supplémentaire (6 couches) est exportée comme les autres
   const layerFiles: GerberFile[] = (nl.board.layers >= 4
-    ? [
-        { idx: 0, name: 'F_Cu.gbr', role: 'Cuivre supérieur (signal)' },
-        { idx: 1, name: 'In1_Cu.gbr', role: 'Cuivre interne 1 (signal)' },
-        { idx: 2, name: 'In2_Cu.gbr', role: 'Cuivre interne 2 (plan de masse)' },
-        { idx: 3, name: 'B_Cu.gbr', role: 'Cuivre inférieur (plan d\'alimentation)' },
-      ]
+    ? Array.from({ length: nl.board.layers }, (_, idx) => ({
+        idx,
+        name: idx === 0 ? 'F_Cu.gbr' : idx === nl.board.layers - 1 ? 'B_Cu.gbr' : `In${idx}_Cu.gbr`,
+        role:
+          idx === 0 ? 'Cuivre supérieur (signal)'
+          : idx === nl.board.layers - 1 ? 'Cuivre inférieur (plan d\'alimentation)'
+          : idx === 2 ? 'Cuivre interne 2 (plan de masse)'
+          : idx === 3 ? 'Cuivre interne 3 (plan d\'alimentation)'
+          : `Cuivre interne ${idx} (signal)`,
+      }))
     : [
         { idx: 0, name: 'F_Cu.gbr', role: 'Cuivre supérieur' },
         { idx: 1, name: 'B_Cu.gbr', role: 'Cuivre inférieur' },

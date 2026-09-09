@@ -176,6 +176,10 @@ export interface Route {
   /** [P1.2] appariement strict de paire différentielle (corridor + méandres) */
   pair?: { partner: string; skewMm: number; gapMm: number; matched: boolean }
   failureReason?: string
+  /** [M5] le chemin traverse l'anneau excavé d'un keepout (accord de conception tracé) */
+  keepoutExcavated?: boolean
+  /** [M5] routé via la paire de couches supplémentaire (corridor de secours interne) */
+  extraLayer?: boolean
 }
 
 export interface RoutingSolution {
@@ -186,6 +190,8 @@ export interface RoutingSolution {
   viaCount: number
   /** [DeepPCB via_minimizer] vias éliminés par la passe de minimisation */
   viasRemoved?: number
+  /** [M5] nets sauvés par la passe « paire de couches supplémentaire » */
+  extraLayerNets?: number
   durationMs: number
   /** cellules du plan de masse synthétique (coordonnées mm, par couche) */
   groundPour?: {

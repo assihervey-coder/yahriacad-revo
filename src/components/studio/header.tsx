@@ -162,20 +162,21 @@ export function StudioHeader() {
       <div className="hidden items-center gap-2 md:flex">
         <div className="text-[11px] text-neutral-500">{nl.board.w}×{nl.board.h} mm · FR4</div>
         <Select
-          value={String(storeNl.board.layers >= 4 ? 4 : 2)}
-          onValueChange={(v) => setLayers(Number(v) as 2 | 4)}
+          value={String(storeNl.board.layers)}
+          onValueChange={(v) => setLayers(Number(v) as 2 | 4 | 6)}
           disabled={running || liveRouting.active}
         >
           <SelectTrigger
             className="h-7 w-[110px] border-emerald-900/60 bg-black/40 text-[11px] text-emerald-100"
             aria-label="Pile de couches cuivre"
-            title="Pile 4 couches [P1.1] : F.Cu signal · In1.Cu signal · In2.Cu masse · B.Cu alim"
+            title="Pile 4 couches [P1.1] : F.Cu signal · In1.Cu signal · In2.Cu masse · B.Cu alim — 6 couches [M5] : paire de couches supplémentaire (F.Cu/In1 signal · In2 masse · In3 alim · In4/B.Cu signal)"
           >
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="border-emerald-900 bg-[#0a130d] text-emerald-100">
             <SelectItem value="2" className="text-[11px]">2 couches</SelectItem>
             <SelectItem value="4" className="text-[11px]">4 couches</SelectItem>
+            <SelectItem value="6" className="text-[11px]">6 couches</SelectItem>
           </SelectContent>
         </Select>
       </div>

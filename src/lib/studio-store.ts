@@ -119,7 +119,7 @@ interface StudioState {
   dragRef: string | null
   setProject: (id: string) => void
   /** [P1.1] pile de couches cuivre du projet courant (2 ou 4) — copie superficielle de la netlist */
-  setLayers: (n: 2 | 4) => void
+  setLayers: (n: 2 | 4 | 6) => void
   addCustomNetlist: (nl: Netlist) => void
   surgicalMove: (ref: string, dx: number, dy: number) => Promise<void>
   log: (stage: LogEntry['stage'], level: LogEntry['level'], msg: string) => void

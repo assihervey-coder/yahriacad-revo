@@ -46,7 +46,10 @@ const symRect = (wMm: number, hMm: number) => `rect${um(wMm)}x${um(hMm)}`
 
 /** Noms de couches cuivre ODB dans l'ordre de la pile. */
 function layerNames(layers: number): string[] {
-  if (layers >= 4) return ['f_cu', 'in1_cu', 'in2_cu', 'b_cu']
+  if (layers >= 4) {
+    return Array.from({ length: layers }, (_, i) =>
+      i === 0 ? 'f_cu' : i === layers - 1 ? 'b_cu' : `in${i}_cu`)
+  }
   return ['f_cu', 'b_cu']
 }
 
